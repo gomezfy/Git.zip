@@ -216,6 +216,15 @@ async function removeOwnReaction(message: Message, emoji: string): Promise<void>
   }
 }
 
+function createProgressBar(progress: number, total: number = 100): string {
+  const barLength = 20;
+  const filled = Math.round((progress / total) * barLength);
+  const empty = barLength - filled;
+  const bar = '█'.repeat(filled) + '░'.repeat(empty);
+  const percentage = Math.round((progress / total) * 100);
+  return `${bar} ${percentage}%`;
+}
+
 async function handleZipAttachment(
   message: Message,
   attachment: Attachment,
@@ -226,18 +235,58 @@ async function handleZipAttachment(
 ): Promise<void> {
   let uploadSuccessful = false;
   let uploadResult: any;
+  let progressMessage: Message | null = null;
+  let fileSize = 0;
 
   try {
     await message.react('⏳');
 
+    progressMessage = await message.reply(
+      `📤 **Iniciando upload...**\n\n` +
+      `📦 Arquivo: \`${attachment.name}\`\n` +
+      `📁 Destino: \`${githubUsername}/${repoName}/${folderPath}\`\n\n` +
+      `🔄 Progresso:\n${createProgressBar(0)}\n` +
+      `⏳ Preparando...`
+    );
+
+    await new Promise(resolve => setTimeout(resolve, 500));
+    await progressMessage.edit(
+      `📤 **Fazendo upload...**\n\n` +
+      `📦 Arquivo: \`${attachment.name}\`\n` +
+      `📁 Destino: \`${githubUsername}/${repoName}/${folderPath}\`\n\n` +
+      `🔄 Progresso:\n${createProgressBar(20)}\n` +
+      `📥 Baixando arquivo...`
+    );
+
     console.log(`📥 Baixando arquivo: ${attachment.name}`);
     const fileContent = await downloadFile(attachment.url);
+    fileSize = fileContent.length;
+
+    const fileSizeStr = fileSize < 1024 * 1024 
+      ? `${(fileSize / 1024).toFixed(2)} KB`
+      : `${(fileSize / 1024 / 1024).toFixed(2)} MB`;
+
+    await progressMessage.edit(
+      `📤 **Fazendo upload...**\n\n` +
+      `📦 Arquivo: \`${attachment.name}\` (${fileSizeStr})\n` +
+      `📁 Destino: \`${githubUsername}/${repoName}/${folderPath}\`\n\n` +
+      `🔄 Progresso:\n${createProgressBar(40)}\n` +
+      `🔍 Verificando repositório...`
+    );
 
     const timestamp = new Date()
       .toISOString()
       .replace(/[:.]/g, '-')
       .slice(0, -5);
     const filepath = `${folderPath}/${timestamp}_${attachment.name}`;
+
+    await progressMessage.edit(
+      `📤 **Fazendo upload...**\n\n` +
+      `📦 Arquivo: \`${attachment.name}\` (${fileSizeStr})\n` +
+      `📁 Destino: \`${githubUsername}/${repoName}/${folderPath}\`\n\n` +
+      `🔄 Progresso:\n${createProgressBar(60)}\n` +
+      `⬆️  Enviando para GitHub...`
+    );
 
     console.log(`⬆️  Fazendo upload para GitHub: ${filepath}`);
     uploadResult = await uploadToGitHub(
@@ -249,18 +298,35 @@ async function handleZipAttachment(
       `Upload: ${attachment.name} (enviado por ${message.author.tag})`
     );
 
+    await progressMessage.edit(
+      `📤 **Fazendo upload...**\n\n` +
+      `📦 Arquivo: \`${attachment.name}\` (${fileSizeStr})\n` +
+      `📁 Destino: \`${githubUsername}/${repoName}/${folderPath}\`\n\n` +
+      `🔄 Progresso:\n${createProgressBar(90)}\n` +
+      `✨ Finalizando...`
+    );
+
     uploadSuccessful = true;
   } catch (error: any) {
     console.error('❌ Erro no upload:', error);
 
+    if (progressMessage) {
+      await progressMessage.edit(
+        `❌ **Erro no upload!**\n\n` +
+        `📦 Arquivo: \`${attachment.name}\`\n\n` +
+        `🔄 Progresso:\n${createProgressBar(0)}\n` +
+        `❌ Falhou`
+      );
+    }
+
     await removeOwnReaction(message, '⏳');
     await message.react('❌');
 
-    let errorMessage = '❌ **Erro ao fazer upload!**\n';
+    let errorMessage = '\n\n';
 
     if (error.message.includes('Not Found')) {
-      errorMessage += `\n⚠️  O repositório \`${githubUsername}/${repoName}\` não existe.\n`;
-      errorMessage += `\n📝 **Como criar o repositório:**\n`;
+      errorMessage += `⚠️  O repositório \`${githubUsername}/${repoName}\` não existe.\n\n`;
+      errorMessage += `📝 **Como criar o repositório:**\n`;
       errorMessage += `1. Acesse: https://github.com/new\n`;
       errorMessage += `2. Nome do repositório: \`${repoName}\`\n`;
       errorMessage += `3. Clique em "Create repository"\n`;
@@ -269,7 +335,15 @@ async function handleZipAttachment(
       errorMessage += `\`\`\`${error.message}\`\`\``;
     }
 
-    await message.reply(errorMessage);
+    if (progressMessage) {
+      await progressMessage.edit(
+        `❌ **Erro no upload!**\n\n` +
+        `📦 Arquivo: \`${attachment.name}\`\n\n` +
+        `🔄 Progresso:\n${createProgressBar(0)}\n` +
+        `❌ Falhou` +
+        errorMessage
+      );
+    }
     return;
   }
 
@@ -277,17 +351,26 @@ async function handleZipAttachment(
     await removeOwnReaction(message, '⏳');
     await message.react('✅');
 
-    const replyMessage =
-      `✅ **Upload concluído!**\n` +
-      `📦 Arquivo: \`${attachment.name}\`\n` +
-      `📁 Repositório: \`${githubUsername}/${repoName}\`\n` +
-      `🔗 Link: ${uploadResult.content.html_url}`;
+    const fileSizeStr = fileSize < 1024 * 1024 
+      ? `${(fileSize / 1024).toFixed(2)} KB`
+      : `${(fileSize / 1024 / 1024).toFixed(2)} MB`;
 
-    await message.reply(replyMessage);
+    if (progressMessage) {
+      await progressMessage.edit(
+        `✅ **Upload concluído!**\n\n` +
+        `📦 Arquivo: \`${attachment.name}\` (${fileSizeStr})\n` +
+        `📁 Repositório: \`${githubUsername}/${repoName}\`\n` +
+        `📂 Pasta: \`${folderPath}\`\n\n` +
+        `🔄 Progresso:\n${createProgressBar(100)}\n` +
+        `✅ Completo!\n\n` +
+        `🔗 **Link**: ${uploadResult.content.html_url}`
+      );
+    }
+
     console.log(`✅ Upload concluído: ${uploadResult.content.html_url}`);
   } catch (error: any) {
-    console.error('❌ Erro ao enviar confirmação:', error);
-    console.log(`✅ Upload concluído (confirmação falhou): ${uploadResult.content.html_url}`);
+    console.error('❌ Erro ao atualizar mensagem final:', error);
+    console.log(`✅ Upload concluído (atualização falhou): ${uploadResult.content.html_url}`);
   }
 }
 

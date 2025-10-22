@@ -4,6 +4,11 @@
 Bot do Discord desenvolvido em TypeScript que permite cada usuário fazer upload de arquivos ZIP para seus próprios repositórios GitHub. Cada usuário se autentica individualmente com seu próprio Personal Access Token do GitHub, que é armazenado de forma criptografada.
 
 ## Mudanças Recentes
+- **2025-10-22**: Adicionada barra de progresso em tempo real para uploads
+  - Barra visual animada mostrando progresso de 0% a 100%
+  - Atualizações em tempo real durante: preparação, download, verificação, upload e finalização
+  - Exibe tamanho do arquivo e destino durante o processo
+  - Mensagem final com link direto para o arquivo no GitHub
 - **2025-10-22**: Bot agora funciona em DMs (mensagens diretas)
   - Adicionada intent DirectMessages para receber comandos em DM
   - Usuários podem usar todos os comandos em mensagens privadas com segurança
