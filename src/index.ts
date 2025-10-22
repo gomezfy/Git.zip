@@ -1,4 +1,14 @@
-import { Client, GatewayIntentBits, Message, Attachment } from 'discord.js';
+import {
+  Client,
+  GatewayIntentBits,
+  REST,
+  Routes,
+  SlashCommandBuilder,
+  ChatInputCommandInteraction,
+  AttachmentBuilder,
+  EmbedBuilder,
+  Attachment,
+} from 'discord.js';
 import { Octokit } from '@octokit/rest';
 import https from 'https';
 import http from 'http';
@@ -72,9 +82,6 @@ async function getDiscordClient(): Promise<Client> {
   const client = new Client({
     intents: [
       GatewayIntentBits.Guilds,
-      GatewayIntentBits.GuildMessages,
-      GatewayIntentBits.MessageContent,
-      GatewayIntentBits.DirectMessages,
     ],
   });
   await client.login(token);
@@ -115,7 +122,7 @@ async function downloadFile(url: string): Promise<Buffer> {
         }
 
         const chunks: Buffer[] = [];
-        response.on('data', (chunk) => chunks.push(chunk));
+        response.on('data', (chunk: Buffer) => chunks.push(chunk));
         response.on('end', () => resolve(Buffer.concat(chunks)));
         response.on('error', reject);
       })
@@ -153,66 +160,6 @@ async function ensureRepoHasContent(
       });
 
       console.log(`📝 Repositório inicializado com README.md`);
-    }
-  }
-}
-
-async function uploadToGitHub(
-  octokit: Octokit,
-  owner: string,
-  repo: string,
-  filepath: string,
-  content: Buffer,
-  message: string
-): Promise<any> {
-  try {
-    await ensureRepoHasContent(octokit, owner, repo);
-
-    const contentBase64 = content.toString('base64');
-
-    let sha: string | undefined;
-    try {
-      const { data: existingFile } = await octokit.repos.getContent({
-        owner,
-        repo,
-        path: filepath,
-      });
-
-      if (!Array.isArray(existingFile) && 'sha' in existingFile) {
-        sha = existingFile.sha;
-      }
-    } catch (error: any) {
-      if (error.status !== 404) throw error;
-    }
-
-    const { data } = await octokit.repos.createOrUpdateFileContents({
-      owner,
-      repo,
-      path: filepath,
-      message,
-      content: contentBase64,
-      sha,
-    });
-
-    return data;
-  } catch (error: any) {
-    throw new Error(`GitHub upload error: ${error.message}`);
-  }
-}
-
-async function removeOwnReaction(message: Message, emoji: string): Promise<void> {
-  try {
-    const reaction = message.reactions.resolve(emoji);
-    if (reaction && reaction.me) {
-      await reaction.users.remove(message.client.user!.id);
-    }
-  } catch (error: any) {
-    if (error.code === 50013) {
-      console.log(`Bot não tem permissão para remover reação ${emoji}`);
-    } else if (error.code === 10008) {
-      console.log(`Mensagem não encontrada ao remover reação ${emoji}`);
-    } else {
-      console.log(`Não foi possível remover reação ${emoji}: ${error.message || error}`);
     }
   }
 }
@@ -264,13 +211,18 @@ async function uploadZipContentsToGitHub(
   progressCallback?: (current: number, total: number, fileName: string) => Promise<void>
 ): Promise<{ totalFiles: number; uploadedFiles: number; failedFiles: string[] }> {
   const zip = new AdmZip(zipBuffer);
-  let zipEntries = zip.getEntries().filter(entry => 
-    !entry.isDirectory && 
-    !entry.entryName.startsWith('__MACOSX') &&
-    !entry.entryName.includes('/.git/') &&
-    !entry.entryName.includes('/.local/') &&
-    !entry.entryName.endsWith('/.gitignore')
-  );
+  let zipEntries = zip.getEntries().filter(entry => {
+    if (entry.isDirectory) return false;
+    
+    const name = entry.entryName.toLowerCase();
+    
+    if (name.startsWith('__macosx/') || name.includes('/__macosx/')) return false;
+    if (name.startsWith('.git/') || name.includes('/.git/')) return false;
+    if (name.startsWith('.ds_store') || name.includes('/.ds_store')) return false;
+    if (name === 'thumbs.db' || name.endsWith('/thumbs.db')) return false;
+    
+    return true;
+  });
 
   const commonPrefix = findCommonPrefix(zipEntries.map(e => e.entryName));
 
@@ -330,7 +282,7 @@ async function uploadZipContentsToGitHub(
           }
         } catch (error: any) {
           console.error(`❌ Erro ao fazer upload de ${entry.entryName}:`, error.message);
-          failedFiles.push(entry.entryName);
+          failedFiles.push(`${entry.entryName} (${error.message})`);
         }
       })
     );
@@ -339,36 +291,30 @@ async function uploadZipContentsToGitHub(
   return { totalFiles, uploadedFiles, failedFiles };
 }
 
-async function handleZipAttachment(
-  message: Message,
+async function handleZipUpload(
+  interaction: ChatInputCommandInteraction,
   attachment: Attachment,
   octokit: Octokit,
   githubUsername: string,
   repoName: string,
   folderPath: string = ''
 ): Promise<void> {
-  let uploadSuccessful = false;
-  let uploadResult: any;
-  let progressMessage: Message | null = null;
-  let fileSize = 0;
+  const destinoDisplay = folderPath 
+    ? `${githubUsername}/${repoName}/${folderPath}` 
+    : `${githubUsername}/${repoName} (raiz)`;
+
+  await interaction.editReply(
+    `📤 **Iniciando extração e upload...**\n\n` +
+    `📦 Arquivo ZIP: \`${attachment.name}\`\n` +
+    `📁 Destino: \`${destinoDisplay}\`\n\n` +
+    `🔄 Progresso:\n${createProgressBar(0)}\n` +
+    `⏳ Preparando...`
+  );
 
   try {
-    await message.react('⏳');
-
-    const destinoDisplay = folderPath 
-      ? `${githubUsername}/${repoName}/${folderPath}` 
-      : `${githubUsername}/${repoName} (raiz)`;
-
-    progressMessage = await message.reply(
-      `📤 **Iniciando extração e upload...**\n\n` +
-      `📦 Arquivo ZIP: \`${attachment.name}\`\n` +
-      `📁 Destino: \`${destinoDisplay}\`\n\n` +
-      `🔄 Progresso:\n${createProgressBar(0)}\n` +
-      `⏳ Preparando...`
-    );
-
     await new Promise(resolve => setTimeout(resolve, 500));
-    await progressMessage.edit(
+    
+    await interaction.editReply(
       `📤 **Extraindo e enviando arquivos...**\n\n` +
       `📦 Arquivo ZIP: \`${attachment.name}\`\n` +
       `📁 Destino: \`${destinoDisplay}\`\n\n` +
@@ -378,13 +324,13 @@ async function handleZipAttachment(
 
     console.log(`📥 Baixando arquivo: ${attachment.name}`);
     const fileContent = await downloadFile(attachment.url);
-    fileSize = fileContent.length;
+    const fileSize = fileContent.length;
 
     const fileSizeStr = fileSize < 1024 * 1024 
       ? `${(fileSize / 1024).toFixed(2)} KB`
       : `${(fileSize / 1024 / 1024).toFixed(2)} MB`;
 
-    await progressMessage.edit(
+    await interaction.editReply(
       `📤 **Extraindo e enviando arquivos...**\n\n` +
       `📦 Arquivo ZIP: \`${attachment.name}\` (${fileSizeStr})\n` +
       `📁 Destino: \`${destinoDisplay}\`\n\n` +
@@ -394,76 +340,25 @@ async function handleZipAttachment(
 
     console.log(`📂 Extraindo conteúdo do ZIP e fazendo upload para GitHub...`);
     
-    uploadResult = await uploadZipContentsToGitHub(
+    const uploadResult = await uploadZipContentsToGitHub(
       octokit,
       githubUsername,
       repoName,
       folderPath,
       fileContent,
-      message.author.tag,
+      interaction.user.tag,
       async (current, total, fileName) => {
         const progress = 20 + Math.round((current / total) * 70);
-        if (progressMessage) {
-          await progressMessage.edit(
-            `📤 **Enviando arquivos para o GitHub** ⚡\n\n` +
-            `📦 Arquivo ZIP: \`${attachment.name}\` (${fileSizeStr})\n` +
-            `📁 Destino: \`${destinoDisplay}\`\n\n` +
-            `📄 Enviando: \`${fileName}\`\n` +
-            `🔄 Progresso: ${current}/${total} arquivos\n${createProgressBar(progress)}\n` +
-            `⚡ Upload paralelo (5 arquivos por vez)...`
-          );
-        }
+        await interaction.editReply(
+          `📤 **Enviando arquivos para o GitHub** ⚡\n\n` +
+          `📦 Arquivo ZIP: \`${attachment.name}\` (${fileSizeStr})\n` +
+          `📁 Destino: \`${destinoDisplay}\`\n\n` +
+          `📄 Enviando: \`${fileName}\`\n` +
+          `🔄 Progresso: ${current}/${total} arquivos\n${createProgressBar(progress)}\n` +
+          `⚡ Upload paralelo (5 arquivos por vez)...`
+        );
       }
     );
-
-    uploadSuccessful = true;
-  } catch (error: any) {
-    console.error('❌ Erro no upload:', error);
-
-    if (progressMessage) {
-      await progressMessage.edit(
-        `❌ **Erro no upload!**\n\n` +
-        `📦 Arquivo: \`${attachment.name}\`\n\n` +
-        `🔄 Progresso:\n${createProgressBar(0)}\n` +
-        `❌ Falhou`
-      );
-    }
-
-    await removeOwnReaction(message, '⏳');
-    await message.react('❌');
-
-    let errorMessage = '\n\n';
-
-    if (error.message.includes('Not Found')) {
-      errorMessage += `⚠️  O repositório \`${githubUsername}/${repoName}\` não existe.\n\n`;
-      errorMessage += `📝 **Como criar o repositório:**\n`;
-      errorMessage += `1. Acesse: https://github.com/new\n`;
-      errorMessage += `2. Nome do repositório: \`${repoName}\`\n`;
-      errorMessage += `3. Clique em "Create repository"\n`;
-      errorMessage += `4. Tente enviar o arquivo novamente`;
-    } else {
-      errorMessage += `\`\`\`${error.message}\`\`\``;
-    }
-
-    if (progressMessage) {
-      await progressMessage.edit(
-        `❌ **Erro no upload!**\n\n` +
-        `📦 Arquivo: \`${attachment.name}\`\n\n` +
-        `🔄 Progresso:\n${createProgressBar(0)}\n` +
-        `❌ Falhou` +
-        errorMessage
-      );
-    }
-    return;
-  }
-
-  try {
-    await removeOwnReaction(message, '⏳');
-    await message.react('✅');
-
-    const fileSizeStr = fileSize < 1024 * 1024 
-      ? `${(fileSize / 1024).toFixed(2)} KB`
-      : `${(fileSize / 1024 / 1024).toFixed(2)} MB`;
 
     const locationDisplay = folderPath 
       ? `\`${folderPath}\`` 
@@ -494,313 +389,104 @@ async function handleZipAttachment(
       `✅ Completo!\n\n` +
       `🔗 **Ver no GitHub**: ${githubLink}`;
 
-    if (progressMessage) {
-      await progressMessage.edit(resultMessage);
-    }
+    await interaction.editReply(resultMessage);
 
     console.log(`✅ Upload concluído: ${uploadResult.uploadedFiles}/${uploadResult.totalFiles} arquivos`);
   } catch (error: any) {
-    console.error('❌ Erro ao atualizar mensagem final:', error);
-    console.log(`✅ Upload concluído (atualização falhou): ${uploadResult.uploadedFiles}/${uploadResult.totalFiles} arquivos`);
-  }
-}
+    console.error('❌ Erro no upload:', error);
 
-const COMMAND_PREFIX = '.';
+    let errorMessage = '\n\n';
 
-async function handleLoginCommand(message: Message, args: string[]): Promise<void> {
-  if (args.length < 2) {
-    await message.reply(
-      `❌ **Erro**: Você precisa fornecer seu token GitHub!\n\n` +
-      `💡 **Como usar**: \`${COMMAND_PREFIX}login <seu_token_github>\`\n\n` +
-      `📝 **Como obter um token**:\n` +
-      `1. Acesse: https://github.com/settings/tokens\n` +
-      `2. Clique em "Generate new token" → "Generate new token (classic)"\n` +
-      `3. Dê um nome (ex: "Discord Bot")\n` +
-      `4. Selecione permissão: \`repo\` (acesso completo a repositórios)\n` +
-      `5. Clique em "Generate token"\n` +
-      `6. Copie o token e use: \`${COMMAND_PREFIX}login <token>\`\n\n` +
-      `⚠️ **Atenção**: Envie o comando em DM (mensagem privada) para manter seu token seguro!`
-    );
-    return;
-  }
-
-  const token = args[1];
-  
-  await message.react('⏳');
-
-  const verification = await verifyGitHubToken(token);
-  
-  if (!verification.valid) {
-    await removeOwnReaction(message, '⏳');
-    await message.react('❌');
-    await message.reply(
-      `❌ **Token inválido!**\n\n` +
-      `O token fornecido não é válido ou não tem as permissões necessárias.\n\n` +
-      `Erro: \`${verification.error}\``
-    );
-    return;
-  }
-
-  try {
-    await saveUserToken(message.author.id, token, verification.username);
-    
-    await removeOwnReaction(message, '⏳');
-    await message.react('✅');
-    
-    await message.reply(
-      `✅ **Login realizado com sucesso!**\n\n` +
-      `👤 Usuário GitHub: \`${verification.username}\`\n` +
-      `🎉 Agora você pode usar \`${COMMAND_PREFIX}upload\` para fazer upload nos seus repositórios!\n\n` +
-      `💡 Use \`${COMMAND_PREFIX}repos\` para ver seus repositórios`
-    );
-    
-    console.log(`✅ Usuário ${message.author.tag} autenticou como ${verification.username}`);
-    
-    if (!message.guild) {
-      if ('send' in message.channel) {
-        await message.channel.send(
-          `🗑️ Por segurança, você pode deletar a mensagem com seu token agora.`
-        );
-      }
+    if (error.message.includes('Not Found')) {
+      errorMessage += `⚠️  O repositório \`${githubUsername}/${repoName}\` não existe.\n\n`;
+      errorMessage += `📝 **Como criar o repositório:**\n`;
+      errorMessage += `1. Acesse: https://github.com/new\n`;
+      errorMessage += `2. Nome do repositório: \`${repoName}\`\n`;
+      errorMessage += `3. Clique em "Create repository"\n`;
+      errorMessage += `4. Tente enviar o arquivo novamente`;
     } else {
-      if ('send' in message.channel) {
-        await message.channel.send(
-          `⚠️ **ATENÇÃO**: Token enviado em canal público! Recomendo que você:\n` +
-          `1. Delete a mensagem com o token AGORA\n` +
-          `2. Gere um novo token em https://github.com/settings/tokens\n` +
-          `3. Revoque o token antigo\n` +
-          `4. Use \`${COMMAND_PREFIX}login\` em DM (mensagem privada) da próxima vez`
-        );
-      }
+      errorMessage += `\`\`\`${error.message}\`\`\``;
     }
-  } catch (error: any) {
-    await removeOwnReaction(message, '⏳');
-    await message.react('❌');
-    await message.reply(`❌ Erro ao salvar token: \`${error.message}\``);
+
+    await interaction.editReply(
+      `❌ **Erro no upload!**\n\n` +
+      `📦 Arquivo: \`${attachment.name}\`\n\n` +
+      `🔄 Progresso:\n${createProgressBar(0)}\n` +
+      `❌ Falhou` +
+      errorMessage
+    );
   }
 }
 
-async function handleLogoutCommand(message: Message): Promise<void> {
-  const hasToken = await hasUserToken(message.author.id);
-  
-  if (!hasToken) {
-    await message.reply(
-      `❌ Você não está autenticado!\n\n` +
-      `Use \`${COMMAND_PREFIX}login <token>\` para fazer login.`
-    );
-    return;
-  }
+// Registrar comandos slash
+async function registerCommands(clientId: string, token: string): Promise<void> {
+  const commands = [
+    new SlashCommandBuilder()
+      .setName('login')
+      .setDescription('Fazer login com seu token GitHub')
+      .addStringOption(option =>
+        option.setName('token')
+          .setDescription('Seu Personal Access Token do GitHub')
+          .setRequired(true)
+      ),
+    
+    new SlashCommandBuilder()
+      .setName('logout')
+      .setDescription('Fazer logout e remover seu token'),
+    
+    new SlashCommandBuilder()
+      .setName('whoami')
+      .setDescription('Ver informações da sua conta GitHub'),
+    
+    new SlashCommandBuilder()
+      .setName('repos')
+      .setDescription('Listar seus repositórios do GitHub (10 mais recentes)'),
+    
+    new SlashCommandBuilder()
+      .setName('upload')
+      .setDescription('Fazer upload de arquivo ZIP para seu repositório GitHub')
+      .addStringOption(option =>
+        option.setName('repositorio')
+          .setDescription('Nome do repositório (ex: meu-projeto)')
+          .setRequired(true)
+      )
+      .addAttachmentOption(option =>
+        option.setName('arquivo')
+          .setDescription('Arquivo ZIP para upload')
+          .setRequired(true)
+      )
+      .addStringOption(option =>
+        option.setName('pasta')
+          .setDescription('Pasta de destino (opcional, deixe vazio para raiz)')
+          .setRequired(false)
+      ),
+    
+    new SlashCommandBuilder()
+      .setName('help')
+      .setDescription('Mostra ajuda e comandos disponíveis'),
+  ].map(command => command.toJSON());
 
-  const removed = await removeUserToken(message.author.id);
-  
-  if (removed) {
-    await message.react('✅');
-    await message.reply(
-      `✅ **Logout realizado com sucesso!**\n\n` +
-      `Seu token foi removido do sistema.\n` +
-      `Use \`${COMMAND_PREFIX}login\` para fazer login novamente.`
-    );
-    console.log(`✅ Usuário ${message.author.tag} fez logout`);
-  } else {
-    await message.react('❌');
-    await message.reply(`❌ Erro ao remover token.`);
-  }
-}
-
-async function handleWhoAmICommand(message: Message): Promise<void> {
-  const userData = await getUserData(message.author.id);
-  
-  if (!userData) {
-    await message.reply(
-      `❌ Você não está autenticado!\n\n` +
-      `Use \`${COMMAND_PREFIX}login <token>\` para fazer login.`
-    );
-    return;
-  }
-
-  const registeredDate = new Date(userData.registeredAt).toLocaleString('pt-BR');
-  
-  await message.reply(
-    `👤 **Informações da sua conta**\n\n` +
-    `🐙 GitHub: \`${userData.githubUsername || 'Não disponível'}\`\n` +
-    `📅 Registrado em: ${registeredDate}\n` +
-    `💬 Discord: ${message.author.tag}`
-  );
-}
-
-async function handleReposCommand(message: Message, args: string[]): Promise<void> {
-  const octokit = await getUserGitHubClient(message.author.id);
-  
-  if (!octokit) {
-    await message.reply(
-      `❌ Você não está autenticado!\n\n` +
-      `Use \`${COMMAND_PREFIX}login <token>\` para fazer login.`
-    );
-    return;
-  }
-
-  await message.react('⏳');
+  const rest = new REST({ version: '10' }).setToken(token);
 
   try {
-    const { data: user } = await octokit.users.getAuthenticated();
-    const { data: repos } = await octokit.repos.listForAuthenticatedUser({
-      sort: 'updated',
-      per_page: 10,
-    });
-
-    await removeOwnReaction(message, '⏳');
-    await message.react('📚');
-
-    if (repos.length === 0) {
-      await message.reply(
-        `📚 **Seus Repositórios**\n\n` +
-        `Você ainda não tem repositórios.\n` +
-        `Crie um em: https://github.com/new`
-      );
-      return;
-    }
-
-    const repoList = repos
-      .map((repo, index) => {
-        const privacy = repo.private ? '🔒' : '🌐';
-        return `${index + 1}. ${privacy} **${repo.name}**\n   ${repo.html_url}`;
-      })
-      .join('\n\n');
-
-    await message.reply(
-      `📚 **Seus Repositórios** (10 mais recentes)\n\n` +
-      `👤 Usuário: \`${user.login}\`\n\n` +
-      `${repoList}\n\n` +
-      `💡 Use \`${COMMAND_PREFIX}upload\` em qualquer destes repositórios!`
+    console.log('🔄 Registrando slash commands...');
+    
+    await rest.put(
+      Routes.applicationCommands(clientId),
+      { body: commands },
     );
-  } catch (error: any) {
-    await removeOwnReaction(message, '⏳');
-    await message.react('❌');
-    await message.reply(
-      `❌ **Erro ao buscar repositórios**\n\n` +
-      `\`\`\`${error.message}\`\`\``
-    );
-  }
-}
 
-async function handleHelpCommand(message: Message): Promise<void> {
-  const isAuthenticated = await hasUserToken(message.author.id);
-  const userData = isAuthenticated ? await getUserData(message.author.id) : null;
-  
-  let authStatus = '';
-  if (isAuthenticated && userData) {
-    authStatus = `\n✅ **Status**: Autenticado como \`${userData.githubUsername}\`\n`;
-  } else {
-    authStatus = `\n❌ **Status**: Não autenticado - Use \`${COMMAND_PREFIX}login\` primeiro\n`;
-  }
-  
-  const helpMessage = 
-    `📚 **Discord GitHub Bot - Comandos Disponíveis**\n` +
-    authStatus +
-    `\n**Autenticação:**\n` +
-    `• \`${COMMAND_PREFIX}login <token>\` - Fazer login com seu token GitHub\n` +
-    `• \`${COMMAND_PREFIX}logout\` - Fazer logout e remover seu token\n` +
-    `• \`${COMMAND_PREFIX}whoami\` - Ver informações da sua conta\n\n` +
-    `**Repositórios:**\n` +
-    `• \`${COMMAND_PREFIX}repos\` - Listar seus repositórios\n` +
-    `• \`${COMMAND_PREFIX}upload <repo> [pasta]\` - Upload de ZIP extraído\n` +
-    `  📂 Sem pasta = raiz do repositório\n` +
-    `  📂 Com pasta = dentro da pasta especificada\n` +
-    `  Exemplo: \`${COMMAND_PREFIX}upload meu-repo\` (raiz)\n` +
-    `  Exemplo: \`${COMMAND_PREFIX}upload meu-repo src\` (pasta src)\n` +
-    `  ⚡ Arquivos existentes são substituídos automaticamente\n` +
-    `  (anexe um arquivo ZIP na mensagem)\n\n` +
-    `**Ajuda:**\n` +
-    `• \`${COMMAND_PREFIX}help\` - Mostra esta mensagem\n\n` +
-    `💡 **Dica**: Use o comando \`${COMMAND_PREFIX}login\` em DM para manter seu token seguro!`;
-
-  await message.reply(helpMessage);
-}
-
-async function handleUploadCommand(
-  message: Message,
-  args: string[]
-): Promise<void> {
-  const octokit = await getUserGitHubClient(message.author.id);
-  
-  if (!octokit) {
-    await message.reply(
-      `❌ **Você não está autenticado!**\n\n` +
-      `Use \`${COMMAND_PREFIX}login <token>\` para fazer login primeiro.\n\n` +
-      `📝 **Como obter um token**:\n` +
-      `1. Acesse: https://github.com/settings/tokens\n` +
-      `2. Gere um novo token com permissão \`repo\`\n` +
-      `3. Use: \`${COMMAND_PREFIX}login <seu_token>\``
-    );
-    return;
-  }
-
-  if (message.attachments.size === 0) {
-    await message.reply(
-      '❌ **Erro**: Você precisa anexar um arquivo ZIP para fazer upload!\n\n' +
-      `💡 **Como usar**: \`${COMMAND_PREFIX}upload <repositório> [pasta]\`\n\n` +
-      `**Exemplos:**\n` +
-      `• \`${COMMAND_PREFIX}upload meu-repo\` - Upload para raiz do repo\n` +
-      `• \`${COMMAND_PREFIX}upload meu-repo projetos\` - Upload para pasta "projetos"\n\n` +
-      `Anexe um arquivo ZIP na mensagem!`
-    );
-    return;
-  }
-
-  if (args.length < 2) {
-    await message.reply(
-      `❌ **Erro**: Você precisa especificar o repositório!\n\n` +
-      `💡 **Como usar**: \`${COMMAND_PREFIX}upload <repositório> [pasta]\`\n\n` +
-      `**Exemplos:**\n` +
-      `• \`${COMMAND_PREFIX}upload meu-repo\`\n` +
-      `• \`${COMMAND_PREFIX}upload meu-repo projetos\`\n\n` +
-      `Use \`${COMMAND_PREFIX}repos\` para ver seus repositórios.`
-    );
-    return;
-  }
-
-  const repoName = args[1];
-  const folderPath = args[2] || '';
-
-  try {
-    const { data: user } = await octokit.users.getAuthenticated();
-    const githubUsername = user.login;
-
-    let hasZipFile = false;
-    for (const attachment of message.attachments.values()) {
-      if (isZipFile(attachment.name!)) {
-        hasZipFile = true;
-        await handleZipAttachment(
-          message,
-          attachment,
-          octokit,
-          githubUsername,
-          repoName,
-          folderPath
-        );
-      }
-    }
-
-    if (!hasZipFile) {
-      await message.reply('❌ **Erro**: Nenhum arquivo ZIP encontrado!\n\n' +
-        `💡 Apenas arquivos com extensão \`.zip\` são aceitos.`);
-    }
-  } catch (error: any) {
-    await message.react('❌');
-    await message.reply(
-      `❌ **Erro ao obter informações do usuário**\n\n` +
-      `\`\`\`${error.message}\`\`\`\n\n` +
-      `Seu token pode estar inválido. Use \`${COMMAND_PREFIX}logout\` e \`${COMMAND_PREFIX}login\` novamente.`
-    );
+    console.log('✅ Slash commands registrados com sucesso!');
+  } catch (error) {
+    console.error('❌ Erro ao registrar slash commands:', error);
   }
 }
 
 async function startBot(): Promise<void> {
-  console.log('🤖 Iniciando bot do Discord...');
+  console.log('🤖 Iniciando bot do Discord com Slash Commands...');
 
   const client = await getDiscordClient();
 
-  // Verifica se está rodando no Replit (integração GitHub disponível)
   const isReplit = process.env.REPLIT_CONNECTORS_HOSTNAME && 
                    (process.env.REPL_IDENTITY || process.env.WEB_REPL_RENEWAL);
 
@@ -810,76 +496,293 @@ async function startBot(): Promise<void> {
       const { data: user } = await octokit.users.getAuthenticated();
       const githubUsername = user.login;
       console.log(`✅ Conectado ao GitHub como: ${githubUsername}`);
-      const GITHUB_REPO = process.env.GITHUB_REPO || 'discord-uploads';
-      console.log(`📁 Repositório configurado: ${githubUsername}/${GITHUB_REPO}`);
     } catch (error) {
       console.log('⚠️  Integração GitHub do Replit não disponível');
       console.log('✅ Modo: Autenticação individual por usuário');
     }
   } else {
     console.log('✅ Modo: Autenticação individual por usuário');
-    console.log('💡 Usuários devem usar .login com seu próprio token GitHub');
   }
 
-  client.on('ready', () => {
+  client.on('ready', async () => {
     console.log(`✅ Bot conectado como ${client.user?.tag}`);
-    console.log('📨 Aguardando comandos...');
-    console.log('\n💡 Comandos disponíveis:');
-    console.log(`   ${COMMAND_PREFIX}login - Fazer login com token GitHub`);
-    console.log(`   ${COMMAND_PREFIX}logout - Fazer logout`);
-    console.log(`   ${COMMAND_PREFIX}whoami - Ver informações da conta`);
-    console.log(`   ${COMMAND_PREFIX}repos - Listar repositórios`);
-    console.log(`   ${COMMAND_PREFIX}upload <repo> [pasta] - Upload de arquivo ZIP`);
-    console.log(`   ${COMMAND_PREFIX}help - Mostra ajuda completa`);
+    
+    if (client.user) {
+      const token = process.env.DISCORD_BOT_TOKEN!;
+      await registerCommands(client.user.id, token);
+    }
+    
+    console.log('📨 Aguardando comandos slash...');
+    console.log('\n💡 Comandos disponíveis (use / no Discord):');
+    console.log('   /login - Fazer login com token GitHub');
+    console.log('   /logout - Fazer logout');
+    console.log('   /whoami - Ver informações da conta');
+    console.log('   /repos - Listar repositórios');
+    console.log('   /upload - Upload de arquivo ZIP');
+    console.log('   /help - Mostra ajuda completa');
     console.log(`\n🔐 Modo: Autenticação individual por usuário`);
-    console.log(`📝 Cada usuário deve usar ${COMMAND_PREFIX}login com seu próprio token GitHub\n`);
+    console.log(`📝 Cada usuário deve usar /login com seu próprio token GitHub\n`);
   });
 
-  client.on('messageCreate', async (message: Message) => {
-    if (message.author.bot) return;
+  client.on('interactionCreate', async (interaction) => {
+    if (!interaction.isChatInputCommand()) return;
 
-    const content = message.content.trim();
-    if (!content.startsWith(COMMAND_PREFIX)) return;
-
-    const args = content.slice(COMMAND_PREFIX.length).trim().split(/\s+/);
-    const command = args[0].toLowerCase();
-
-    switch (command) {
-      case 'login':
-        await handleLoginCommand(message, args);
-        break;
-
-      case 'logout':
-        await handleLogoutCommand(message);
-        break;
-
-      case 'whoami':
-        await handleWhoAmICommand(message);
-        break;
-
-      case 'repos':
-        await handleReposCommand(message, args);
-        break;
-
-      case 'upload':
-        await handleUploadCommand(message, args);
-        break;
-
-      case 'help':
-        await handleHelpCommand(message);
-        break;
-
-      default:
-        await message.reply(
-          `❌ Comando desconhecido: \`${COMMAND_PREFIX}${command}\`\n\n` +
-          `Use \`${COMMAND_PREFIX}help\` para ver os comandos disponíveis.`
-        );
+    try {
+      switch (interaction.commandName) {
+        case 'login':
+          await handleLoginCommand(interaction);
+          break;
+        case 'logout':
+          await handleLogoutCommand(interaction);
+          break;
+        case 'whoami':
+          await handleWhoAmICommand(interaction);
+          break;
+        case 'repos':
+          await handleReposCommand(interaction);
+          break;
+        case 'upload':
+          await handleUploadCommand(interaction);
+          break;
+        case 'help':
+          await handleHelpCommand(interaction);
+          break;
+      }
+    } catch (error: any) {
+      console.error('❌ Erro ao processar comando:', error);
+      const errorMessage = `❌ **Erro ao processar comando**\n\n\`\`\`${error.message}\`\`\``;
+      
+      if (interaction.deferred || interaction.replied) {
+        await interaction.editReply(errorMessage);
+      } else {
+        await interaction.reply({ content: errorMessage, ephemeral: true });
+      }
     }
   });
 
   client.on('error', (error: Error) => {
     console.error('❌ Erro no Discord:', error);
   });
+}
+
+// Handlers de comandos slash
+async function handleLoginCommand(interaction: ChatInputCommandInteraction): Promise<void> {
+  const token = interaction.options.getString('token', true);
+  
+  await interaction.deferReply({ ephemeral: true });
+
+  const verification = await verifyGitHubToken(token);
+  
+  if (!verification.valid) {
+    await interaction.editReply(
+      `❌ **Token inválido!**\n\n` +
+      `O token fornecido não é válido ou não tem as permissões necessárias.\n\n` +
+      `Erro: \`${verification.error}\``
+    );
+    return;
+  }
+
+  try {
+    await saveUserToken(interaction.user.id, token, verification.username);
+    
+    await interaction.editReply(
+      `✅ **Login realizado com sucesso!**\n\n` +
+      `👤 Usuário GitHub: \`${verification.username}\`\n` +
+      `🎉 Agora você pode usar \`/upload\` para fazer upload nos seus repositórios!\n\n` +
+      `💡 Use \`/repos\` para ver seus repositórios`
+    );
+    
+    console.log(`✅ Usuário ${interaction.user.tag} autenticou como ${verification.username}`);
+  } catch (error: any) {
+    await interaction.editReply(`❌ Erro ao salvar token: \`${error.message}\``);
+  }
+}
+
+async function handleLogoutCommand(interaction: ChatInputCommandInteraction): Promise<void> {
+  await interaction.deferReply({ ephemeral: true });
+  
+  const hasToken = await hasUserToken(interaction.user.id);
+  
+  if (!hasToken) {
+    await interaction.editReply(
+      `❌ Você não está autenticado!\n\n` +
+      `Use \`/login\` para fazer login.`
+    );
+    return;
+  }
+
+  const removed = await removeUserToken(interaction.user.id);
+  
+  if (removed) {
+    await interaction.editReply(
+      `✅ **Logout realizado com sucesso!**\n\n` +
+      `Seu token foi removido do sistema.\n` +
+      `Use \`/login\` para fazer login novamente.`
+    );
+    console.log(`✅ Usuário ${interaction.user.tag} fez logout`);
+  } else {
+    await interaction.editReply(`❌ Erro ao remover token.`);
+  }
+}
+
+async function handleWhoAmICommand(interaction: ChatInputCommandInteraction): Promise<void> {
+  await interaction.deferReply({ ephemeral: true });
+  
+  const userData = await getUserData(interaction.user.id);
+  
+  if (!userData) {
+    await interaction.editReply(
+      `❌ Você não está autenticado!\n\n` +
+      `Use \`/login\` para fazer login.`
+    );
+    return;
+  }
+
+  const registeredDate = new Date(userData.registeredAt).toLocaleString('pt-BR');
+  
+  await interaction.editReply(
+    `👤 **Informações da sua conta**\n\n` +
+    `🐙 GitHub: \`${userData.githubUsername || 'Não disponível'}\`\n` +
+    `📅 Registrado em: ${registeredDate}\n` +
+    `💬 Discord: ${interaction.user.tag}`
+  );
+}
+
+async function handleReposCommand(interaction: ChatInputCommandInteraction): Promise<void> {
+  await interaction.deferReply();
+  
+  const octokit = await getUserGitHubClient(interaction.user.id);
+  
+  if (!octokit) {
+    await interaction.editReply(
+      `❌ Você não está autenticado!\n\n` +
+      `Use \`/login\` para fazer login.`
+    );
+    return;
+  }
+
+  try {
+    const { data: user } = await octokit.users.getAuthenticated();
+    const { data: repos } = await octokit.repos.listForAuthenticatedUser({
+      sort: 'updated',
+      per_page: 10,
+    });
+
+    if (repos.length === 0) {
+      await interaction.editReply(
+        `📚 **Seus Repositórios**\n\n` +
+        `Você ainda não tem repositórios.\n` +
+        `Crie um em: https://github.com/new`
+      );
+      return;
+    }
+
+    const repoList = repos
+      .map((repo: any, index: number) => {
+        const privacy = repo.private ? '🔒' : '🌐';
+        return `${index + 1}. ${privacy} **${repo.name}**\n   ${repo.html_url}`;
+      })
+      .join('\n\n');
+
+    await interaction.editReply(
+      `📚 **Seus Repositórios** (10 mais recentes)\n\n` +
+      `👤 Usuário: \`${user.login}\`\n\n` +
+      `${repoList}\n\n` +
+      `💡 Use \`/upload\` em qualquer destes repositórios!`
+    );
+  } catch (error: any) {
+    await interaction.editReply(
+      `❌ **Erro ao buscar repositórios**\n\n` +
+      `\`\`\`${error.message}\`\`\``
+    );
+  }
+}
+
+async function handleUploadCommand(interaction: ChatInputCommandInteraction): Promise<void> {
+  await interaction.deferReply();
+  
+  const octokit = await getUserGitHubClient(interaction.user.id);
+  
+  if (!octokit) {
+    await interaction.editReply(
+      `❌ **Você não está autenticado!**\n\n` +
+      `Use \`/login\` para fazer login primeiro.\n\n` +
+      `📝 **Como obter um token**:\n` +
+      `1. Acesse: https://github.com/settings/tokens\n` +
+      `2. Gere um novo token com permissão \`repo\`\n` +
+      `3. Use: \`/login\``
+    );
+    return;
+  }
+
+  const repoName = interaction.options.getString('repositorio', true);
+  const folderPath = interaction.options.getString('pasta') || '';
+  const attachment = interaction.options.getAttachment('arquivo', true);
+
+  if (!isZipFile(attachment.name!)) {
+    await interaction.editReply(
+      '❌ **Erro**: O arquivo deve ser um ZIP!\n\n' +
+      `💡 Apenas arquivos com extensão \`.zip\` são aceitos.`
+    );
+    return;
+  }
+
+  try {
+    const { data: user } = await octokit.users.getAuthenticated();
+    const githubUsername = user.login;
+
+    await handleZipUpload(
+      interaction,
+      attachment,
+      octokit,
+      githubUsername,
+      repoName,
+      folderPath
+    );
+  } catch (error: any) {
+    await interaction.editReply(
+      `❌ **Erro ao obter informações do usuário**\n\n` +
+      `\`\`\`${error.message}\`\`\`\n\n` +
+      `Seu token pode estar inválido. Use \`/logout\` e \`/login\` novamente.`
+    );
+  }
+}
+
+async function handleHelpCommand(interaction: ChatInputCommandInteraction): Promise<void> {
+  await interaction.deferReply({ ephemeral: true });
+  
+  const isAuthenticated = await hasUserToken(interaction.user.id);
+  const userData = isAuthenticated ? await getUserData(interaction.user.id) : null;
+  
+  let authStatus = '';
+  if (isAuthenticated && userData) {
+    authStatus = `\n✅ **Status**: Autenticado como \`${userData.githubUsername}\`\n`;
+  } else {
+    authStatus = `\n❌ **Status**: Não autenticado - Use \`/login\` primeiro\n`;
+  }
+  
+  const helpMessage = 
+    `📚 **Discord GitHub Bot - Comandos Disponíveis**\n` +
+    `⚡ **Tecnologia**: Slash Commands (comandos de barra /)\n` +
+    authStatus +
+    `\n**Autenticação:**\n` +
+    `• \`/login\` - Fazer login com seu token GitHub\n` +
+    `• \`/logout\` - Fazer logout e remover seu token\n` +
+    `• \`/whoami\` - Ver informações da sua conta\n\n` +
+    `**Repositórios:**\n` +
+    `• \`/repos\` - Listar seus repositórios\n` +
+    `• \`/upload\` - Upload de ZIP extraído para repositório\n` +
+    `  📂 Parâmetros:\n` +
+    `     • repositorio: nome do seu repo (ex: meu-projeto)\n` +
+    `     • arquivo: arquivo ZIP para upload\n` +
+    `     • pasta: pasta de destino (opcional)\n` +
+    `  ⚡ Arquivos existentes são substituídos automaticamente\n` +
+    `  ⚡ Upload paralelo (5 arquivos por vez)\n\n` +
+    `**Ajuda:**\n` +
+    `• \`/help\` - Mostra esta mensagem\n\n` +
+    `💡 **Dica**: Comandos \`/login\` são automaticamente privados (ephemeral)!`;
+
+  await interaction.editReply(helpMessage);
 }
 
 startBot().catch((error: Error) => {
