@@ -223,7 +223,7 @@ function createProgressBar(progress: number, total: number = 100): string {
   const empty = barLength - filled;
   const bar = '█'.repeat(filled) + '░'.repeat(empty);
   const percentage = Math.round((progress / total) * 100);
-  return `${bar} ${percentage}%`;
+  return `\`\`\`ansi\n\u001b[36;1m${bar}\u001b[0m ${percentage}%\n\`\`\``;
 }
 
 async function uploadZipContentsToGitHub(
