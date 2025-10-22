@@ -548,14 +548,27 @@ async function startBot(): Promise<void> {
   console.log('🤖 Iniciando bot do Discord...');
 
   const client = await getDiscordClient();
-  const octokit = await getGitHubClient();
 
-  const { data: user } = await octokit.users.getAuthenticated();
-  const githubUsername = user.login;
-  console.log(`✅ Conectado ao GitHub como: ${githubUsername}`);
+  // Verifica se está rodando no Replit (integração GitHub disponível)
+  const isReplit = process.env.REPLIT_CONNECTORS_HOSTNAME && 
+                   (process.env.REPL_IDENTITY || process.env.WEB_REPL_RENEWAL);
 
-  const GITHUB_REPO = process.env.GITHUB_REPO || 'discord-uploads';
-  console.log(`📁 Repositório configurado: ${githubUsername}/${GITHUB_REPO}`);
+  if (isReplit) {
+    try {
+      const octokit = await getGitHubClient();
+      const { data: user } = await octokit.users.getAuthenticated();
+      const githubUsername = user.login;
+      console.log(`✅ Conectado ao GitHub como: ${githubUsername}`);
+      const GITHUB_REPO = process.env.GITHUB_REPO || 'discord-uploads';
+      console.log(`📁 Repositório configurado: ${githubUsername}/${GITHUB_REPO}`);
+    } catch (error) {
+      console.log('⚠️  Integração GitHub do Replit não disponível');
+      console.log('✅ Modo: Autenticação individual por usuário');
+    }
+  } else {
+    console.log('✅ Modo: Autenticação individual por usuário');
+    console.log('💡 Usuários devem usar .login com seu próprio token GitHub');
+  }
 
   client.on('ready', () => {
     console.log(`✅ Bot conectado como ${client.user?.tag}`);

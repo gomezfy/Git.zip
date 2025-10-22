@@ -58,16 +58,15 @@ Após criar a aplicação, você precisa adicionar as seguintes variáveis de am
    - Exemplo: `minha-chave-super-secreta-de-32-caracteres-ou-mais`
    - Use um gerador de senhas forte
 
-### Configuração do GitHub (via Replit):
+### Configuração do GitHub:
 
-O bot já está configurado para usar a integração GitHub do Replit. Na Vertra Cloud, você tem duas opções:
+✅ **O bot foi atualizado para funcionar automaticamente na Vertra Cloud!**
 
-**Opção A: Usar GitHub OAuth (Recomendado)**
-- Configure as variáveis `REPLIT_CONNECTORS_HOSTNAME` e `REPL_IDENTITY` se disponíveis
+O código detecta automaticamente se está rodando no Replit ou na Vertra Cloud:
+- **No Replit**: Usa a integração GitHub do Replit (se disponível)
+- **Na Vertra Cloud**: Funciona apenas com autenticação individual por usuário
 
-**Opção B: Usar um Personal Access Token**
-- Remova o código de integração Replit do arquivo `src/index.ts`
-- Configure apenas autenticação por usuário via comando `.login`
+**Nenhuma configuração adicional necessária!** Apenas configure as duas variáveis de ambiente acima.
 
 ## Passo 5: Deploy e Monitoramento
 
