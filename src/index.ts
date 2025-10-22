@@ -235,6 +235,25 @@ function normalizePath(path: string): string {
     .trim();
 }
 
+function findCommonPrefix(paths: string[]): string {
+  if (paths.length === 0) return '';
+  if (paths.length === 1) {
+    const parts = paths[0].split('/');
+    return parts.length > 1 ? parts[0] + '/' : '';
+  }
+  
+  const sortedPaths = paths.slice().sort();
+  const first = sortedPaths[0].split('/');
+  const last = sortedPaths[sortedPaths.length - 1].split('/');
+  
+  let i = 0;
+  while (i < first.length && i < last.length && first[i] === last[i]) {
+    i++;
+  }
+  
+  return i > 0 && first[0] === last[0] ? first.slice(0, i).join('/') + '/' : '';
+}
+
 async function uploadZipContentsToGitHub(
   octokit: Octokit,
   owner: string,
@@ -245,7 +264,15 @@ async function uploadZipContentsToGitHub(
   progressCallback?: (current: number, total: number, fileName: string) => Promise<void>
 ): Promise<{ totalFiles: number; uploadedFiles: number; failedFiles: string[] }> {
   const zip = new AdmZip(zipBuffer);
-  const zipEntries = zip.getEntries().filter(entry => !entry.isDirectory && !entry.entryName.startsWith('__MACOSX'));
+  let zipEntries = zip.getEntries().filter(entry => 
+    !entry.isDirectory && 
+    !entry.entryName.startsWith('__MACOSX') &&
+    !entry.entryName.includes('/.git/') &&
+    !entry.entryName.includes('/.local/') &&
+    !entry.entryName.endsWith('/.gitignore')
+  );
+
+  const commonPrefix = findCommonPrefix(zipEntries.map(e => e.entryName));
 
   const totalFiles = zipEntries.length;
   let uploadedFiles = 0;
@@ -261,7 +288,12 @@ async function uploadZipContentsToGitHub(
     await Promise.all(
       batch.map(async (entry) => {
         try {
-          const fileName = entry.entryName;
+          let fileName = entry.entryName;
+          
+          if (commonPrefix && fileName.startsWith(commonPrefix)) {
+            fileName = fileName.substring(commonPrefix.length);
+          }
+          
           const fileContent = entry.getData();
           const contentBase64 = fileContent.toString('base64');
 
