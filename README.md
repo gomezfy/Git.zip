@@ -203,6 +203,50 @@ Configure estas secrets no Replit:
 - Secret deve ter no mínimo 32 caracteres
 - Se mudou a secret, faça logout e login novamente
 
+## 🌐 Deploy na Vertra Cloud
+
+O projeto está totalmente configurado para deploy na **Vertra Cloud**, uma plataforma brasileira de hospedagem para apps, bots e bancos de dados.
+
+### Arquivos de Configuração
+
+- ✅ `vertracloud.config` - Configurações da aplicação
+- ✅ `.vertracloudignore` - Arquivos a excluir do deploy
+- ✅ `DEPLOY_VERTRA.md` - Guia completo de deploy
+- ✅ `criar-zip-vertra.sh` - Script para criar ZIP
+
+### Deploy Rápido
+
+1. **Criar arquivo ZIP:**
+   ```bash
+   ./criar-zip-vertra.sh
+   ```
+
+2. **Fazer deploy:**
+   - Acesse: https://vertracloud.app/dashboard/new
+   - Faça upload do arquivo `discord-github-bot.zip`
+   - Configure as variáveis de ambiente:
+     - `DISCORD_BOT_TOKEN`
+     - `ENCRYPTION_SECRET`
+   - Clique em "Create Application"
+
+3. **Ver guia completo:**
+   - Consulte `DEPLOY_VERTRA.md` para instruções detalhadas
+
+### Recursos da Vertra Cloud
+
+- ✅ Deploy em segundos
+- ✅ Escalabilidade automática
+- ✅ Monitoramento 24/7
+- ✅ Backups automáticos
+- ✅ Plano gratuito disponível
+
+### Suporte Vertra Cloud
+
+- 🌐 Website: https://vertracloud.app
+- 📖 Documentação: https://docs.vertracloud.app
+- 💬 Discord: https://discord.gg/vertracloud
+- 📧 Email: support@vertracloud.app
+
 ## 🎯 Próximos Passos (Melhorias Futuras)
 
 - [ ] Suporte para outros tipos de arquivo além de ZIP

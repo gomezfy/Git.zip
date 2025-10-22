@@ -4,6 +4,12 @@
 Bot do Discord desenvolvido em TypeScript que permite cada usuário fazer upload de arquivos ZIP para seus próprios repositórios GitHub. Cada usuário se autentica individualmente com seu próprio Personal Access Token do GitHub, que é armazenado de forma criptografada.
 
 ## Mudanças Recentes
+- **2025-10-22**: Configuração para deploy na Vertra Cloud
+  - Adicionado arquivo `vertracloud.config` com configurações da aplicação
+  - Criado `.vertracloudignore` para excluir arquivos desnecessários
+  - Adicionado guia completo `DEPLOY_VERTRA.md` com instruções de deploy
+  - Criado script `criar-zip-vertra.sh` para facilitar criação do ZIP
+  - Projeto pronto para hospedagem na Vertra Cloud
 - **2025-10-22**: Sistema de autenticação individual implementado
   - Adicionado sistema de login/logout por usuário
   - Implementada criptografia AES-256-GCM para tokens GitHub
