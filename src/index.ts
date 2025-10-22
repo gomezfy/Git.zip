@@ -14,6 +14,7 @@ import https from 'https';
 import http from 'http';
 import AdmZip from 'adm-zip';
 import { saveUserToken, getUserToken, removeUserToken, hasUserToken, getUserData } from './userTokens.js';
+import { initEncryption } from './encryption.js';
 
 interface ConnectionSettings {
   settings: {
@@ -771,6 +772,9 @@ async function startBot(): Promise<void> {
 
   // Validate environment before doing anything else
   validateEnvironment();
+  
+  // Initialize encryption with unique salt
+  await initEncryption();
 
   const token = process.env.DISCORD_BOT_TOKEN!;
 
