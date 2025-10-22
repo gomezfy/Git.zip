@@ -73,6 +73,7 @@ async function getDiscordClient(): Promise<Client> {
       GatewayIntentBits.Guilds,
       GatewayIntentBits.GuildMessages,
       GatewayIntentBits.MessageContent,
+      GatewayIntentBits.DirectMessages,
     ],
   });
   await client.login(token);
