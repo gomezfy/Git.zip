@@ -72,19 +72,12 @@ async function getGitHubAccessToken(): Promise<string> {
   return accessToken;
 }
 
-async function getDiscordClient(): Promise<Client> {
-  const token = process.env.DISCORD_BOT_TOKEN;
-  
-  if (!token) {
-    throw new Error('DISCORD_BOT_TOKEN não encontrado nas variáveis de ambiente');
-  }
-  
+function createDiscordClient(): Client {
   const client = new Client({
     intents: [
       GatewayIntentBits.Guilds,
     ],
   });
-  await client.login(token);
   return client;
 }
 
@@ -515,7 +508,13 @@ async function registerCommands(clientId: string, token: string): Promise<void> 
 async function startBot(): Promise<void> {
   console.log('🤖 Iniciando bot do Discord com Slash Commands...');
 
-  const client = await getDiscordClient();
+  const token = process.env.DISCORD_BOT_TOKEN;
+  
+  if (!token) {
+    throw new Error('DISCORD_BOT_TOKEN não encontrado nas variáveis de ambiente');
+  }
+
+  const client = createDiscordClient();
 
   const isReplit = process.env.REPLIT_CONNECTORS_HOSTNAME && 
                    (process.env.REPL_IDENTITY || process.env.WEB_REPL_RENEWAL);
@@ -534,11 +533,10 @@ async function startBot(): Promise<void> {
     console.log('✅ Modo: Autenticação individual por usuário');
   }
 
-  client.on('ready', async () => {
+  client.once('ready', async () => {
     console.log(`✅ Bot conectado como ${client.user?.tag}`);
     
     if (client.user) {
-      const token = process.env.DISCORD_BOT_TOKEN!;
       await registerCommands(client.user.id, token);
     }
     
@@ -593,6 +591,9 @@ async function startBot(): Promise<void> {
   client.on('error', (error: Error) => {
     console.error('❌ Erro no Discord:', error);
   });
+
+  console.log('🔌 Conectando ao Discord...');
+  await client.login(token);
 }
 
 // Handlers de comandos slash
