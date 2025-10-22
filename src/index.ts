@@ -248,109 +248,63 @@ async function uploadZipContentsToGitHub(
   const zipEntries = zip.getEntries().filter(entry => !entry.isDirectory && !entry.entryName.startsWith('__MACOSX'));
 
   const totalFiles = zipEntries.length;
+  let uploadedFiles = 0;
   const failedFiles: string[] = [];
 
   await ensureRepoHasContent(octokit, owner, repo);
 
-  try {
-    if (progressCallback) {
-      await progressCallback(0, 100, 'Preparando upload em lote...');
-    }
+  const BATCH_SIZE = 5;
+  
+  for (let i = 0; i < zipEntries.length; i += BATCH_SIZE) {
+    const batch = zipEntries.slice(i, i + BATCH_SIZE);
+    
+    await Promise.all(
+      batch.map(async (entry) => {
+        try {
+          const fileName = entry.entryName;
+          const fileContent = entry.getData();
+          const contentBase64 = fileContent.toString('base64');
 
-    const { data: refData } = await octokit.git.getRef({
-      owner,
-      repo,
-      ref: 'heads/main',
-    });
-    const commitSha = refData.object.sha;
+          const filepath = folderPath ? `${folderPath}/${fileName}` : fileName;
 
-    if (progressCallback) {
-      await progressCallback(20, 100, 'Obtendo commit atual...');
-    }
+          let sha: string | undefined;
+          try {
+            const { data: existingFile } = await octokit.repos.getContent({
+              owner,
+              repo,
+              path: filepath,
+            });
 
-    const { data: commitData } = await octokit.git.getCommit({
-      owner,
-      repo,
-      commit_sha: commitSha,
-    });
-    const treeSha = commitData.tree.sha;
+            if (!Array.isArray(existingFile) && 'sha' in existingFile) {
+              sha = existingFile.sha;
+            }
+          } catch (error: any) {
+            if (error.status !== 404) throw error;
+          }
 
-    if (progressCallback) {
-      await progressCallback(40, 100, 'Criando blobs dos arquivos...');
-    }
+          await octokit.repos.createOrUpdateFileContents({
+            owner,
+            repo,
+            path: filepath,
+            message: `Upload: ${fileName} (enviado por ${authorTag})`,
+            content: contentBase64,
+            sha,
+          });
 
-    const blobs = await Promise.all(
-      zipEntries.map(async (entry) => {
-        const fileContent = entry.getData();
-        const contentBase64 = fileContent.toString('base64');
-        
-        const { data: blob } = await octokit.git.createBlob({
-          owner,
-          repo,
-          content: contentBase64,
-          encoding: 'base64',
-        });
-        
-        const normalizedPath = normalizePath(entry.entryName);
-        const finalPath = folderPath ? normalizePath(`${folderPath}/${normalizedPath}`) : normalizedPath;
-        
-        console.log(`📄 Caminho original: "${entry.entryName}" -> normalizado: "${finalPath}"`);
-        
-        return {
-          path: finalPath,
-          mode: '100644' as const,
-          type: 'blob' as const,
-          sha: blob.sha,
-        };
+          uploadedFiles++;
+          
+          if (progressCallback) {
+            await progressCallback(uploadedFiles, totalFiles, fileName);
+          }
+        } catch (error: any) {
+          console.error(`❌ Erro ao fazer upload de ${entry.entryName}:`, error.message);
+          failedFiles.push(entry.entryName);
+        }
       })
     );
-    
-    console.log(`📊 Total de blobs criados: ${blobs.length}`);
-    console.log(`📋 Primeiros 3 caminhos:`, blobs.slice(0, 3).map(b => b.path));
-
-    if (progressCallback) {
-      await progressCallback(70, 100, 'Criando árvore Git...');
-    }
-
-    const { data: newTree } = await octokit.git.createTree({
-      owner,
-      repo,
-      base_tree: treeSha,
-      tree: blobs,
-    });
-
-    if (progressCallback) {
-      await progressCallback(85, 100, 'Criando commit...');
-    }
-
-    const { data: newCommit } = await octokit.git.createCommit({
-      owner,
-      repo,
-      message: `Upload de ${totalFiles} arquivos via Discord Bot (enviado por ${authorTag})`,
-      tree: newTree.sha,
-      parents: [commitSha],
-    });
-
-    if (progressCallback) {
-      await progressCallback(95, 100, 'Atualizando branch...');
-    }
-
-    await octokit.git.updateRef({
-      owner,
-      repo,
-      ref: 'heads/main',
-      sha: newCommit.sha,
-    });
-
-    if (progressCallback) {
-      await progressCallback(100, 100, 'Concluído!');
-    }
-
-    return { totalFiles, uploadedFiles: totalFiles, failedFiles: [] };
-  } catch (error: any) {
-    console.error(`❌ Erro no upload em lote:`, error.message);
-    return { totalFiles, uploadedFiles: 0, failedFiles: zipEntries.map(e => e.entryName) };
   }
+
+  return { totalFiles, uploadedFiles, failedFiles };
 }
 
 async function handleZipAttachment(
@@ -415,16 +369,16 @@ async function handleZipAttachment(
       folderPath,
       fileContent,
       message.author.tag,
-      async (current, total, statusMessage) => {
+      async (current, total, fileName) => {
         const progress = 20 + Math.round((current / total) * 70);
         if (progressMessage) {
           await progressMessage.edit(
-            `📤 **Upload em lote via Git Trees API** ⚡\n\n` +
+            `📤 **Enviando arquivos para o GitHub** ⚡\n\n` +
             `📦 Arquivo ZIP: \`${attachment.name}\` (${fileSizeStr})\n` +
             `📁 Destino: \`${destinoDisplay}\`\n\n` +
-            `⚡ Status: ${statusMessage}\n` +
-            `🔄 Progresso:\n${createProgressBar(progress)}\n` +
-            `🚀 Upload ultra-rápido em andamento...`
+            `📄 Enviando: \`${fileName}\`\n` +
+            `🔄 Progresso: ${current}/${total} arquivos\n${createProgressBar(progress)}\n` +
+            `⚡ Upload paralelo (5 arquivos por vez)...`
           );
         }
       }
