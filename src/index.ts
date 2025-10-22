@@ -226,6 +226,15 @@ function createProgressBar(progress: number, total: number = 100): string {
   return `\`\`\`ansi\n\u001b[36;1m${bar}\u001b[0m ${percentage}%\n\`\`\``;
 }
 
+function normalizePath(path: string): string {
+  return path
+    .replace(/\\/g, '/')
+    .replace(/^\/+/, '')
+    .replace(/\/+/g, '/')
+    .replace(/\.\.+\//g, '')
+    .trim();
+}
+
 async function uploadZipContentsToGitHub(
   octokit: Octokit,
   owner: string,
@@ -282,8 +291,11 @@ async function uploadZipContentsToGitHub(
           encoding: 'base64',
         });
         
+        const normalizedPath = normalizePath(entry.entryName);
+        const finalPath = folderPath ? normalizePath(`${folderPath}/${normalizedPath}`) : normalizedPath;
+        
         return {
-          path: folderPath ? `${folderPath}/${entry.entryName}` : entry.entryName,
+          path: finalPath,
           mode: '100644' as const,
           type: 'blob' as const,
           sha: blob.sha,
