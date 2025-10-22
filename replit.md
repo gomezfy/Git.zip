@@ -4,6 +4,26 @@
 Bot do Discord desenvolvido em TypeScript que permite cada usuário fazer upload de arquivos ZIP para seus próprios repositórios GitHub. Cada usuário se autentica individualmente com seu próprio Personal Access Token do GitHub, que é armazenado de forma criptografada.
 
 ## Mudanças Recentes
+- **2025-10-22**: ATUALIZAÇÃO MAJOR - Migração para Slash Commands ⚡✨
+  - Bot completamente reescrito com Discord Slash Commands (comandos de barra /)
+  - Tecnologia mais avançada e moderna do Discord
+  - Comandos agora são: /login, /logout, /whoami, /repos, /upload, /help
+  - Registro automático de comandos ao iniciar o bot
+  - Comandos sensíveis (/login) são automaticamente ephemeral (privados)
+  - Upload de arquivos integrado nos parâmetros do comando (/upload arquivo:...)
+  - Interface mais limpa e profissional
+  - Removido sistema antigo de comandos com prefixo (.)
+  - Removidas intents desnecessárias (GuildMessages, MessageContent, DirectMessages)
+  - Apenas Guilds intent necessária para Slash Commands
+- **2025-10-22**: Correção de filtro de arquivos no upload
+  - Filtro de arquivos menos agressivo - agora envia TODOS os arquivos válidos
+  - Exclui apenas arquivos de sistema: __MACOSX, .git, .DS_Store, thumbs.db
+  - Corrigido problema onde .gitignore e outros arquivos válidos eram excluídos
+  - Mensagens de erro melhoradas com detalhes dos arquivos que falharam
+  - Agora mostra o motivo específico de falha para cada arquivo
+- **2025-10-22**: Limpeza de arquivos desnecessários
+  - Removidos arquivos da Vertra Cloud (criar-zip-vertra.sh, DEPLOY_VERTRA.md, vertracloud.config, .vertracloudignore)
+  - Projeto mais limpo e focado no Replit
 - **2025-10-22**: Upload otimizado com paralelização ⚡
   - Upload paralelo em lotes de 5 arquivos por vez
   - Redução de tempo: ~70% mais rápido que sequencial
@@ -114,19 +134,23 @@ Bot do Discord desenvolvido em TypeScript que permite cada usuário fazer upload
 - Salt fixo para derivação de chave
 - Validação de integridade via auth tag
 
-### Comandos Disponíveis
+### Comandos Disponíveis (Slash Commands)
 
 **Autenticação:**
-- `.login <token>` - Fazer login com Personal Access Token GitHub
-- `.logout` - Fazer logout e remover token
-- `.whoami` - Ver informações da conta autenticada
+- `/login` - Fazer login com Personal Access Token GitHub (ephemeral/privado)
+- `/logout` - Fazer logout e remover token (ephemeral/privado)
+- `/whoami` - Ver informações da conta autenticada (ephemeral/privado)
 
 **Repositórios:**
-- `.repos` - Listar seus repositórios (10 mais recentes)
-- `.upload <repo> [pasta]` - Upload de ZIP para repositório específico
+- `/repos` - Listar seus repositórios (10 mais recentes)
+- `/upload` - Upload de ZIP extraído para repositório específico
+  - Parâmetros:
+    - `repositorio` (obrigatório): nome do repositório
+    - `arquivo` (obrigatório): arquivo ZIP para upload
+    - `pasta` (opcional): pasta de destino dentro do repositório
 
 **Ajuda:**
-- `.help` - Mostra comandos disponíveis e status de autenticação
+- `/help` - Mostra comandos disponíveis e status de autenticação (ephemeral/privado)
 
 ## Configuração
 

@@ -174,12 +174,15 @@ function createProgressBar(progress: number, total: number = 100): string {
 }
 
 function normalizePath(path: string): string {
-  return path
+  let normalized = path
     .replace(/\\/g, '/')
     .replace(/^\/+/, '')
     .replace(/\/+/g, '/')
-    .replace(/\.\.+\//g, '')
     .trim();
+  
+  const parts = normalized.split('/').filter(part => part !== '.' && part !== '..' && part !== '');
+  
+  return parts.join('/');
 }
 
 function findCommonPrefix(paths: string[]): string {
@@ -233,6 +236,8 @@ async function uploadZipContentsToGitHub(
   await ensureRepoHasContent(octokit, owner, repo);
 
   const BATCH_SIZE = 5;
+  let lastProgressUpdate = Date.now();
+  const PROGRESS_THROTTLE_MS = 1000;
   
   for (let i = 0; i < zipEntries.length; i += BATCH_SIZE) {
     const batch = zipEntries.slice(i, i + BATCH_SIZE);
@@ -242,14 +247,31 @@ async function uploadZipContentsToGitHub(
         try {
           let fileName = entry.entryName;
           
+          const pathSegments = fileName.split('/');
+          const hasTraversal = pathSegments.some(segment => segment === '..');
+          
+          if (hasTraversal || fileName.startsWith('/') || fileName.includes('\\')) {
+            console.warn(`⚠️  Ignorando arquivo com caminho suspeito: ${entry.entryName}`);
+            failedFiles.push(`${entry.entryName} (caminho suspeito)`);
+            return;
+          }
+          
           if (commonPrefix && fileName.startsWith(commonPrefix)) {
             fileName = fileName.substring(commonPrefix.length);
+          }
+          
+          fileName = normalizePath(fileName);
+          
+          if (!fileName) {
+            console.warn(`⚠️  Ignorando arquivo com caminho vazio após normalização: ${entry.entryName}`);
+            failedFiles.push(`${entry.entryName} (caminho vazio)`);
+            return;
           }
           
           const fileContent = entry.getData();
           const contentBase64 = fileContent.toString('base64');
 
-          const filepath = folderPath ? `${folderPath}/${fileName}` : fileName;
+          const filepath = normalizePath(folderPath ? `${folderPath}/${fileName}` : fileName);
 
           let sha: string | undefined;
           try {
@@ -278,7 +300,11 @@ async function uploadZipContentsToGitHub(
           uploadedFiles++;
           
           if (progressCallback) {
-            await progressCallback(uploadedFiles, totalFiles, fileName);
+            const now = Date.now();
+            if (now - lastProgressUpdate >= PROGRESS_THROTTLE_MS) {
+              await progressCallback(uploadedFiles, totalFiles, fileName);
+              lastProgressUpdate = now;
+            }
           }
         } catch (error: any) {
           console.error(`❌ Erro ao fazer upload de ${entry.entryName}:`, error.message);
@@ -286,6 +312,10 @@ async function uploadZipContentsToGitHub(
         }
       })
     );
+  }
+
+  if (progressCallback && totalFiles > 0 && uploadedFiles === totalFiles) {
+    await progressCallback(uploadedFiles, totalFiles, 'Concluído');
   }
 
   return { totalFiles, uploadedFiles, failedFiles };
