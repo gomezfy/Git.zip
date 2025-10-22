@@ -14,6 +14,7 @@ import https from 'https';
 import http from 'http';
 import AdmZip from 'adm-zip';
 import { saveUserToken, getUserToken, removeUserToken, hasUserToken, getUserData } from './userTokens.js';
+import { initEncryption } from './encryption.js';
 
 interface ConnectionSettings {
   settings: {
@@ -94,13 +95,33 @@ async function getUserGitHubClient(discordUserId: string): Promise<Octokit | nul
   return new Octokit({ auth: token });
 }
 
-async function verifyGitHubToken(token: string): Promise<{ valid: boolean; username?: string; error?: string }> {
+async function verifyGitHubToken(token: string): Promise<{ valid: boolean; username?: string; error?: string; scopes?: string[] }> {
   try {
     const octokit = new Octokit({ auth: token });
-    const { data: user } = await octokit.users.getAuthenticated();
-    return { valid: true, username: user.login };
+    
+    // Get user info and check token scopes
+    const response = await octokit.request('GET /user');
+    const user = response.data;
+    
+    // GitHub returns scopes in the X-OAuth-Scopes header
+    const scopes = response.headers['x-oauth-scopes']?.split(',').map(s => s.trim()) || [];
+    
+    // Check if token has required 'repo' scope
+    const hasRepoScope = scopes.includes('repo') || 
+                         scopes.includes('public_repo') ||
+                         scopes.some(s => s.startsWith('repo:'));
+    
+    if (!hasRepoScope) {
+      return { 
+        valid: false, 
+        error: 'Token does not have required "repo" scope. Please generate a new token with repository access.',
+        scopes
+      };
+    }
+    
+    return { valid: true, username: user.login, scopes };
   } catch (error: any) {
-    return { valid: false, error: error.message };
+    return { valid: false, error: sanitizeErrorMessage(error) };
   }
 }
 
@@ -120,6 +141,7 @@ async function downloadFile(url: string): Promise<Buffer> {
       .get(url, (response) => {
         if (response.statusCode !== 200) {
           clearTimeout(timeoutId);
+          response.destroy();
           reject(new Error(`Failed to download file: ${response.statusCode}`));
           return;
         }
@@ -132,7 +154,7 @@ async function downloadFile(url: string): Promise<Buffer> {
           
           if (totalSize > MAX_FILE_SIZE) {
             clearTimeout(timeoutId);
-            request.destroy();
+            response.destroy();
             reject(new Error(`File too large: exceeds ${MAX_FILE_SIZE / 1024 / 1024}MB limit`));
             return;
           }
@@ -154,6 +176,11 @@ async function downloadFile(url: string): Promise<Buffer> {
         clearTimeout(timeoutId);
         reject(error);
       });
+    
+    request.setTimeout(DOWNLOAD_TIMEOUT, () => {
+      request.destroy();
+      reject(new Error('Request timeout: connection timed out'));
+    });
   });
 }
 
@@ -200,7 +227,52 @@ function createProgressBar(progress: number, total: number = 100): string {
   return `\`\`\`ansi\n\u001b[36;1m${bar}\u001b[0m ${percentage}%\n\`\`\``;
 }
 
+function isValidPath(path: string): boolean {
+  if (!path || typeof path !== 'string') return false;
+  
+  // Decode URL encoding to check for hidden traversal attempts
+  let decoded = path;
+  try {
+    decoded = decodeURIComponent(path);
+  } catch {
+    return false; // Invalid encoding
+  }
+  
+  // Check for path traversal patterns (including encoded versions)
+  const dangerousPatterns = [
+    /\.\./,           // Direct ..
+    /%2e%2e/i,        // URL encoded ..
+    /%252e%252e/i,    // Double encoded ..
+    /\.\%2e/i,        // Mixed encoding
+    /%2e\./i,         // Mixed encoding
+    /\0/,             // Null bytes
+    /[\x00-\x1f]/,    // Control characters
+  ];
+  
+  for (const pattern of dangerousPatterns) {
+    if (pattern.test(path) || pattern.test(decoded)) {
+      return false;
+    }
+  }
+  
+  // Check for absolute paths
+  if (path.startsWith('/') || /^[a-zA-Z]:/.test(path)) {
+    return false;
+  }
+  
+  // Check for backslashes (Windows paths)
+  if (path.includes('\\')) {
+    return false;
+  }
+  
+  return true;
+}
+
 function normalizePath(path: string): string {
+  if (!isValidPath(path)) {
+    throw new Error('Invalid or potentially dangerous path detected');
+  }
+  
   let normalized = path
     .replace(/\\/g, '/')
     .replace(/^\/+/, '')
@@ -240,8 +312,46 @@ async function uploadZipContentsToGitHub(
   authorTag: string,
   progressCallback?: (current: number, total: number, fileName: string) => Promise<void>
 ): Promise<{ totalFiles: number; uploadedFiles: number; failedFiles: string[] }> {
+  const MAX_UNCOMPRESSED_SIZE = 500 * 1024 * 1024; // 500MB uncompressed limit
+  const MAX_COMPRESSION_RATIO = 100; // Max 100:1 compression ratio
+  const MAX_FILES = 10000; // Max 10k files to prevent resource exhaustion
+  
   const zip = new AdmZip(zipBuffer);
-  let zipEntries = zip.getEntries().filter(entry => {
+  const allEntries = zip.getEntries();
+  
+  // ZIP bomb protection: check total uncompressed size and file count
+  let totalUncompressedSize = 0;
+  let fileCount = 0;
+  
+  for (const entry of allEntries) {
+    if (!entry.isDirectory) {
+      fileCount++;
+      totalUncompressedSize += entry.header.size;
+      
+      // Check compression ratio for individual files
+      const compressedSize = entry.header.compressedSize;
+      if (compressedSize > 0) {
+        const ratio = entry.header.size / compressedSize;
+        if (ratio > MAX_COMPRESSION_RATIO) {
+          throw new Error(
+            `ZIP bomb detected: file "${entry.entryName}" has suspicious compression ratio (${ratio.toFixed(1)}:1)`
+          );
+        }
+      }
+    }
+  }
+  
+  if (fileCount > MAX_FILES) {
+    throw new Error(`ZIP contains too many files (${fileCount}). Maximum allowed: ${MAX_FILES}`);
+  }
+  
+  if (totalUncompressedSize > MAX_UNCOMPRESSED_SIZE) {
+    const sizeMB = (totalUncompressedSize / 1024 / 1024).toFixed(2);
+    const maxMB = (MAX_UNCOMPRESSED_SIZE / 1024 / 1024).toFixed(0);
+    throw new Error(`ZIP bomb detected: total uncompressed size (${sizeMB}MB) exceeds limit (${maxMB}MB)`);
+  }
+  
+  let zipEntries = allEntries.filter(entry => {
     if (entry.isDirectory) return false;
     
     const name = entry.entryName.toLowerCase();
@@ -539,14 +649,134 @@ async function registerCommands(clientId: string, token: string): Promise<void> 
   }
 }
 
+// Rate limiting
+interface RateLimitEntry {
+  lastCommand: number;
+  commandCount: number;
+  resetTime: number;
+}
+
+const rateLimitMap = new Map<string, RateLimitEntry>();
+const RATE_LIMIT_WINDOW = 60000; // 1 minute window
+const MAX_COMMANDS_PER_WINDOW = 10; // Max 10 commands per minute
+const COOLDOWN_BETWEEN_COMMANDS = 2000; // 2 seconds between commands
+
+function checkRateLimit(userId: string): { allowed: boolean; retryAfter?: number } {
+  const now = Date.now();
+  const entry = rateLimitMap.get(userId);
+  
+  if (!entry) {
+    rateLimitMap.set(userId, {
+      lastCommand: now,
+      commandCount: 1,
+      resetTime: now + RATE_LIMIT_WINDOW
+    });
+    return { allowed: true };
+  }
+  
+  // Reset counter if window expired
+  if (now > entry.resetTime) {
+    entry.commandCount = 1;
+    entry.resetTime = now + RATE_LIMIT_WINDOW;
+    entry.lastCommand = now;
+    return { allowed: true };
+  }
+  
+  // Check cooldown between commands
+  const timeSinceLastCommand = now - entry.lastCommand;
+  if (timeSinceLastCommand < COOLDOWN_BETWEEN_COMMANDS) {
+    return { 
+      allowed: false, 
+      retryAfter: Math.ceil((COOLDOWN_BETWEEN_COMMANDS - timeSinceLastCommand) / 1000)
+    };
+  }
+  
+  // Check if exceeded max commands in window
+  if (entry.commandCount >= MAX_COMMANDS_PER_WINDOW) {
+    const retryAfter = Math.ceil((entry.resetTime - now) / 1000);
+    return { allowed: false, retryAfter };
+  }
+  
+  // Allow command and increment counter
+  entry.commandCount++;
+  entry.lastCommand = now;
+  return { allowed: true };
+}
+
+// Clean up old rate limit entries periodically
+setInterval(() => {
+  const now = Date.now();
+  for (const [userId, entry] of rateLimitMap.entries()) {
+    if (now > entry.resetTime + RATE_LIMIT_WINDOW) {
+      rateLimitMap.delete(userId);
+    }
+  }
+}, 300000); // Clean up every 5 minutes
+
+function sanitizeErrorMessage(error: any): string {
+  if (!error) return 'Unknown error';
+  
+  let message = error.message || String(error);
+  
+  // Remove potential tokens (GitHub tokens start with ghp_, gho_, ghs_, etc.)
+  message = message.replace(/gh[ps]_[a-zA-Z0-9]{36,}/g, '[REDACTED_TOKEN]');
+  
+  // Remove Discord bot tokens
+  message = message.replace(/[A-Za-z0-9_-]{24}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27,}/g, '[REDACTED_TOKEN]');
+  
+  // Remove encryption secrets or keys
+  message = message.replace(/secret[=:]\s*[^\s]+/gi, 'secret=[REDACTED]');
+  message = message.replace(/key[=:]\s*[^\s]+/gi, 'key=[REDACTED]');
+  message = message.replace(/password[=:]\s*[^\s]+/gi, 'password=[REDACTED]');
+  
+  // Remove file paths that might contain sensitive info
+  message = message.replace(/\/home\/[^\s]+/g, '[PATH]');
+  message = message.replace(/C:\\Users\\[^\s]+/g, '[PATH]');
+  
+  // Limit message length
+  if (message.length > 500) {
+    message = message.substring(0, 500) + '... [truncated]';
+  }
+  
+  return message;
+}
+
+function validateEnvironment(): void {
+  const errors: string[] = [];
+  
+  // Required variables
+  if (!process.env.DISCORD_BOT_TOKEN) {
+    errors.push('DISCORD_BOT_TOKEN is required');
+  }
+  
+  if (!process.env.ENCRYPTION_SECRET) {
+    errors.push('ENCRYPTION_SECRET is required');
+  } else if (process.env.ENCRYPTION_SECRET.length < 32) {
+    errors.push('ENCRYPTION_SECRET must be at least 32 characters long');
+  }
+  
+  if (errors.length > 0) {
+    console.error('❌ Environment validation failed:');
+    errors.forEach(error => console.error(`   - ${error}`));
+    console.error('\n📝 Required environment variables:');
+    console.error('   - DISCORD_BOT_TOKEN: Your Discord bot token');
+    console.error('   - ENCRYPTION_SECRET: Strong secret key (min 32 chars) for token encryption');
+    throw new Error('Missing or invalid required environment variables');
+  }
+  
+  console.log('✅ Environment variables validated');
+}
+
 async function startBot(): Promise<void> {
   console.log('🤖 Iniciando bot do Discord com Slash Commands...');
 
-  const token = process.env.DISCORD_BOT_TOKEN;
+  // Validate environment before doing anything else
+  validateEnvironment();
   
-  if (!token) {
-    throw new Error('DISCORD_BOT_TOKEN não encontrado nas variáveis de ambiente');
-  }
+  // Initialize encryption with unique salt
+  await initEncryption();
+
+  const token = process.env.DISCORD_BOT_TOKEN!;
 
   const client = createDiscordClient();
 
@@ -589,6 +819,16 @@ async function startBot(): Promise<void> {
   client.on('interactionCreate', async (interaction) => {
     if (!interaction.isChatInputCommand()) return;
 
+    // Check rate limit
+    const rateLimit = checkRateLimit(interaction.user.id);
+    if (!rateLimit.allowed) {
+      await interaction.reply({
+        content: `⏱️ **Rate limit excedido!**\n\nVocê está enviando comandos muito rápido.\nTente novamente em ${rateLimit.retryAfter} segundo(s).`,
+        ephemeral: true
+      });
+      return;
+    }
+
     try {
       switch (interaction.commandName) {
         case 'login':
@@ -611,19 +851,24 @@ async function startBot(): Promise<void> {
           break;
       }
     } catch (error: any) {
-      console.error('❌ Erro ao processar comando:', error);
-      const errorMessage = `❌ **Erro ao processar comando**\n\n\`\`\`${error.message}\`\`\``;
+      console.error('❌ Erro ao processar comando:', sanitizeErrorMessage(error));
+      const sanitizedMessage = sanitizeErrorMessage(error);
+      const errorMessage = `❌ **Erro ao processar comando**\n\n\`\`\`${sanitizedMessage}\`\`\``;
       
-      if (interaction.deferred || interaction.replied) {
-        await interaction.editReply(errorMessage);
-      } else {
-        await interaction.reply({ content: errorMessage, ephemeral: true });
+      try {
+        if (interaction.deferred || interaction.replied) {
+          await interaction.editReply(errorMessage);
+        } else {
+          await interaction.reply({ content: errorMessage, ephemeral: true });
+        }
+      } catch (replyError) {
+        console.error('❌ Erro ao enviar mensagem de erro:', sanitizeErrorMessage(replyError));
       }
     }
   });
 
   client.on('error', (error: Error) => {
-    console.error('❌ Erro no Discord:', error);
+    console.error('❌ Erro no Discord:', sanitizeErrorMessage(error));
   });
 
   console.log('🔌 Conectando ao Discord...');
@@ -659,7 +904,7 @@ async function handleLoginCommand(interaction: ChatInputCommandInteraction): Pro
     
     console.log(`✅ Usuário ${interaction.user.tag} autenticou como ${verification.username}`);
   } catch (error: any) {
-    await interaction.editReply(`❌ Erro ao salvar token: \`${error.message}\``);
+    await interaction.editReply(`❌ Erro ao salvar token: \`${sanitizeErrorMessage(error)}\``);
   }
 }
 
@@ -758,7 +1003,7 @@ async function handleReposCommand(interaction: ChatInputCommandInteraction): Pro
   } catch (error: any) {
     await interaction.editReply(
       `❌ **Erro ao buscar repositórios**\n\n` +
-      `\`\`\`${error.message}\`\`\``
+      `\`\`\`${sanitizeErrorMessage(error)}\`\`\``
     );
   }
 }
@@ -807,7 +1052,7 @@ async function handleUploadCommand(interaction: ChatInputCommandInteraction): Pr
   } catch (error: any) {
     await interaction.editReply(
       `❌ **Erro ao obter informações do usuário**\n\n` +
-      `\`\`\`${error.message}\`\`\`\n\n` +
+      `\`\`\`${sanitizeErrorMessage(error)}\`\`\`\n\n` +
       `Seu token pode estar inválido. Use \`/logout\` e \`/login\` novamente.`
     );
   }

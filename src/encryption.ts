@@ -1,10 +1,49 @@
 import crypto from 'crypto';
+import { promises as fs } from 'fs';
+import path from 'path';
 
 const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 16;
 const AUTH_TAG_LENGTH = 16;
 const SALT_LENGTH = 64;
 const KEY_LENGTH = 32;
+const SALT_FILE = path.join(process.cwd(), 'data', 'encryption.salt');
+
+let cachedSalt: Buffer | null = null;
+
+async function getOrCreateSalt(): Promise<Buffer> {
+  if (cachedSalt) {
+    return cachedSalt;
+  }
+  
+  try {
+    // Try to read existing salt
+    const saltHex = await fs.readFile(SALT_FILE, 'utf-8');
+    cachedSalt = Buffer.from(saltHex, 'hex');
+    
+    if (cachedSalt.length !== SALT_LENGTH) {
+      throw new Error('Invalid salt length');
+    }
+    
+    return cachedSalt;
+  } catch (error: any) {
+    if (error.code === 'ENOENT') {
+      // Generate new salt
+      cachedSalt = crypto.randomBytes(SALT_LENGTH);
+      
+      // Ensure data directory exists
+      const dataDir = path.dirname(SALT_FILE);
+      await fs.mkdir(dataDir, { recursive: true });
+      
+      // Save salt with restrictive permissions
+      await fs.writeFile(SALT_FILE, cachedSalt.toString('hex'), { mode: 0o600 });
+      
+      console.log('✅ Generated new encryption salt');
+      return cachedSalt;
+    }
+    throw error;
+  }
+}
 
 function getEncryptionKey(): Buffer {
   const secret = process.env.ENCRYPTION_SECRET;
@@ -22,12 +61,16 @@ function getEncryptionKey(): Buffer {
     );
   }
   
-  const salt = crypto
-    .createHash('sha256')
-    .update('discord-github-bot-salt-v1')
-    .digest();
+  // Use synchronous version for compatibility, but salt is loaded async at startup
+  if (!cachedSalt) {
+    throw new Error('Encryption salt not initialized. Call initEncryption() at startup.');
+  }
 
-  return crypto.pbkdf2Sync(secret, salt, 100000, KEY_LENGTH, 'sha256');
+  return crypto.pbkdf2Sync(secret, cachedSalt, 100000, KEY_LENGTH, 'sha256');
+}
+
+export async function initEncryption(): Promise<void> {
+  await getOrCreateSalt();
 }
 
 export function encryptToken(token: string): string {

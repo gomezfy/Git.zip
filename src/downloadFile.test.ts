@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from '@jest/globals';
 import http from 'http';
 import { AddressInfo } from 'net';
 
-// Mock download function for testing
+// Mock download function for testing (matches the fixed implementation)
 async function downloadFile(url: string): Promise<Buffer> {
   const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB limit
   const DOWNLOAD_TIMEOUT = 60000; // 60 seconds timeout
@@ -19,6 +19,7 @@ async function downloadFile(url: string): Promise<Buffer> {
       .get(url, (response: any) => {
         if (response.statusCode !== 200) {
           clearTimeout(timeoutId);
+          response.destroy();
           reject(new Error(`Failed to download file: ${response.statusCode}`));
           return;
         }
@@ -31,7 +32,7 @@ async function downloadFile(url: string): Promise<Buffer> {
           
           if (totalSize > MAX_FILE_SIZE) {
             clearTimeout(timeoutId);
-            request.destroy();
+            response.destroy();
             reject(new Error(`File too large: exceeds ${MAX_FILE_SIZE / 1024 / 1024}MB limit`));
             return;
           }
@@ -53,6 +54,11 @@ async function downloadFile(url: string): Promise<Buffer> {
         clearTimeout(timeoutId);
         reject(error);
       });
+    
+    request.setTimeout(DOWNLOAD_TIMEOUT, () => {
+      request.destroy();
+      reject(new Error('Request timeout: connection timed out'));
+    });
   });
 }
 
@@ -119,6 +125,7 @@ describe('downloadFile', () => {
         const request = http.get(url, (response) => {
           if (response.statusCode !== 200) {
             clearTimeout(timeoutId);
+            response.destroy();
             reject(new Error(`Failed to download file: ${response.statusCode}`));
             return;
           }
@@ -131,7 +138,7 @@ describe('downloadFile', () => {
             
             if (totalSize > MAX_FILE_SIZE) {
               clearTimeout(timeoutId);
-              request.destroy();
+              response.destroy();
               reject(new Error(`File too large: exceeds ${MAX_FILE_SIZE / 1024 / 1024}MB limit`));
               return;
             }
@@ -151,6 +158,11 @@ describe('downloadFile', () => {
         }).on('error', (error) => {
           clearTimeout(timeoutId);
           reject(error);
+        });
+        
+        request.setTimeout(DOWNLOAD_TIMEOUT, () => {
+          request.destroy();
+          reject(new Error('Request timeout: connection timed out'));
         });
       });
     };
