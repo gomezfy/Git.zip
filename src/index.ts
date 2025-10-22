@@ -355,11 +355,32 @@ async function uploadZipContentsToGitHub(
     if (entry.isDirectory) return false;
     
     const name = entry.entryName.toLowerCase();
+    const originalName = entry.entryName;
     
+    // System files
     if (name.startsWith('__macosx/') || name.includes('/__macosx/')) return false;
-    if (name.startsWith('.git/') || name.includes('/.git/')) return false;
     if (name.startsWith('.ds_store') || name.includes('/.ds_store')) return false;
     if (name === 'thumbs.db' || name.endsWith('/thumbs.db')) return false;
+    
+    // Version control
+    if (name.startsWith('.git/') || name.includes('/.git/')) return false;
+    if (name.startsWith('.svn/') || name.includes('/.svn/')) return false;
+    
+    // Replit specific files
+    if (name.startsWith('.replit') || name.includes('/.replit')) return false;
+    if (name.startsWith('.local/') || name.includes('/.local/')) return false;
+    if (name.startsWith('.cache/') || name.includes('/.cache/')) return false;
+    if (name.startsWith('.config/replit/') || name.includes('/.config/replit/')) return false;
+    if (name.includes('.agent_state_')) return false;
+    if (name.includes('replit/agent/')) return false;
+    
+    // IDE files
+    if (name.startsWith('.vscode/') || name.includes('/.vscode/')) return false;
+    if (name.startsWith('.idea/') || name.includes('/.idea/')) return false;
+    
+    // Temporary files
+    if (name.endsWith('.tmp') || name.endsWith('.temp')) return false;
+    if (name.endsWith('~') || name.startsWith('~')) return false;
     
     return true;
   });
@@ -411,28 +432,49 @@ async function uploadZipContentsToGitHub(
           const filepath = normalizePath(folderPath ? `${folderPath}/${fileName}` : fileName);
 
           let sha: string | undefined;
-          try {
-            const { data: existingFile } = await octokit.repos.getContent({
-              owner,
-              repo,
-              path: filepath,
-            });
+          let retries = 0;
+          const MAX_RETRIES = 3;
+          
+          while (retries < MAX_RETRIES) {
+            try {
+              // Get current file SHA if it exists
+              try {
+                const { data: existingFile } = await octokit.repos.getContent({
+                  owner,
+                  repo,
+                  path: filepath,
+                });
 
-            if (!Array.isArray(existingFile) && 'sha' in existingFile) {
-              sha = existingFile.sha;
+                if (!Array.isArray(existingFile) && 'sha' in existingFile) {
+                  sha = existingFile.sha;
+                }
+              } catch (error: any) {
+                if (error.status !== 404) throw error;
+                sha = undefined; // File doesn't exist
+              }
+
+              // Try to create or update the file
+              await octokit.repos.createOrUpdateFileContents({
+                owner,
+                repo,
+                path: filepath,
+                message: `Upload: ${fileName} (enviado por ${authorTag})`,
+                content: contentBase64,
+                sha,
+              });
+              
+              break; // Success, exit retry loop
+              
+            } catch (error: any) {
+              if (error.status === 409 && retries < MAX_RETRIES - 1) {
+                // SHA conflict - file was modified, retry with fresh SHA
+                retries++;
+                await new Promise(resolve => setTimeout(resolve, 500 * retries)); // Exponential backoff
+                continue;
+              }
+              throw error; // Other error or max retries reached
             }
-          } catch (error: any) {
-            if (error.status !== 404) throw error;
           }
-
-          await octokit.repos.createOrUpdateFileContents({
-            owner,
-            repo,
-            path: filepath,
-            message: `Upload: ${fileName} (enviado por ${authorTag})`,
-            content: contentBase64,
-            sha,
-          });
 
           uploadedFiles++;
           
