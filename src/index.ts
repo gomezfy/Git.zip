@@ -797,7 +797,7 @@ async function startBot(): Promise<void> {
     console.log('✅ Modo: Autenticação individual por usuário');
   }
 
-  client.once('ready', async () => {
+  client.once('clientReady', async () => {
     console.log(`✅ Bot conectado como ${client.user?.tag}`);
     
     if (client.user) {
