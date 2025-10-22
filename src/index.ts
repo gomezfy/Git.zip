@@ -252,7 +252,7 @@ async function uploadZipContentsToGitHub(
       const fileContent = entry.getData();
       const contentBase64 = fileContent.toString('base64');
 
-      const filepath = `${folderPath}/${fileName}`;
+      const filepath = folderPath ? `${folderPath}/${fileName}` : fileName;
 
       if (progressCallback) {
         await progressCallback(i + 1, totalFiles, fileName);
@@ -298,7 +298,7 @@ async function handleZipAttachment(
   octokit: Octokit,
   githubUsername: string,
   repoName: string,
-  folderPath: string = 'uploads'
+  folderPath: string = ''
 ): Promise<void> {
   let uploadSuccessful = false;
   let uploadResult: any;
@@ -308,10 +308,14 @@ async function handleZipAttachment(
   try {
     await message.react('⏳');
 
+    const destinoDisplay = folderPath 
+      ? `${githubUsername}/${repoName}/${folderPath}` 
+      : `${githubUsername}/${repoName} (raiz)`;
+
     progressMessage = await message.reply(
       `📤 **Iniciando extração e upload...**\n\n` +
       `📦 Arquivo ZIP: \`${attachment.name}\`\n` +
-      `📁 Destino: \`${githubUsername}/${repoName}/${folderPath}\`\n\n` +
+      `📁 Destino: \`${destinoDisplay}\`\n\n` +
       `🔄 Progresso:\n${createProgressBar(0)}\n` +
       `⏳ Preparando...`
     );
@@ -320,7 +324,7 @@ async function handleZipAttachment(
     await progressMessage.edit(
       `📤 **Extraindo e enviando arquivos...**\n\n` +
       `📦 Arquivo ZIP: \`${attachment.name}\`\n` +
-      `📁 Destino: \`${githubUsername}/${repoName}/${folderPath}\`\n\n` +
+      `📁 Destino: \`${destinoDisplay}\`\n\n` +
       `🔄 Progresso:\n${createProgressBar(10)}\n` +
       `📥 Baixando arquivo ZIP...`
     );
@@ -336,16 +340,10 @@ async function handleZipAttachment(
     await progressMessage.edit(
       `📤 **Extraindo e enviando arquivos...**\n\n` +
       `📦 Arquivo ZIP: \`${attachment.name}\` (${fileSizeStr})\n` +
-      `📁 Destino: \`${githubUsername}/${repoName}/${folderPath}\`\n\n` +
+      `📁 Destino: \`${destinoDisplay}\`\n\n` +
       `🔄 Progresso:\n${createProgressBar(20)}\n` +
       `📂 Extraindo conteúdo do ZIP...`
     );
-
-    const timestamp = new Date()
-      .toISOString()
-      .replace(/[:.]/g, '-')
-      .slice(0, -5);
-    const uploadFolderPath = `${folderPath}/${timestamp}`;
 
     console.log(`📂 Extraindo conteúdo do ZIP e fazendo upload para GitHub...`);
     
@@ -353,7 +351,7 @@ async function handleZipAttachment(
       octokit,
       githubUsername,
       repoName,
-      uploadFolderPath,
+      folderPath,
       fileContent,
       message.author.tag,
       async (current, total, fileName) => {
@@ -362,7 +360,7 @@ async function handleZipAttachment(
           await progressMessage.edit(
             `📤 **Extraindo e enviando arquivos...**\n\n` +
             `📦 Arquivo ZIP: \`${attachment.name}\` (${fileSizeStr})\n` +
-            `📁 Destino: \`${githubUsername}/${repoName}/${uploadFolderPath}\`\n\n` +
+            `📁 Destino: \`${destinoDisplay}\`\n\n` +
             `📄 Enviando: \`${fileName}\`\n` +
             `🔄 Progresso: ${current}/${total} arquivos\n${createProgressBar(progress)}\n` +
             `⬆️  Fazendo upload...`
@@ -420,16 +418,18 @@ async function handleZipAttachment(
       ? `${(fileSize / 1024).toFixed(2)} KB`
       : `${(fileSize / 1024 / 1024).toFixed(2)} MB`;
 
-    const timestamp = new Date()
-      .toISOString()
-      .replace(/[:.]/g, '-')
-      .slice(0, -5);
-    const uploadFolderPath = `${folderPath}/${timestamp}`;
+    const locationDisplay = folderPath 
+      ? `\`${folderPath}\`` 
+      : '`/ (raiz)`';
+
+    const githubLink = folderPath
+      ? `https://github.com/${githubUsername}/${repoName}/tree/main/${folderPath}`
+      : `https://github.com/${githubUsername}/${repoName}`;
 
     let resultMessage = `✅ **Upload concluído!**\n\n` +
       `📦 Arquivo ZIP: \`${attachment.name}\` (${fileSizeStr})\n` +
       `📁 Repositório: \`${githubUsername}/${repoName}\`\n` +
-      `📂 Pasta: \`${uploadFolderPath}\`\n\n` +
+      `📂 Localização: ${locationDisplay}\n\n` +
       `📊 Resultado:\n` +
       `✅ Arquivos enviados: ${uploadResult.uploadedFiles}/${uploadResult.totalFiles}\n`;
 
@@ -445,7 +445,7 @@ async function handleZipAttachment(
 
     resultMessage += `\n🔄 Progresso:\n${createProgressBar(100)}\n` +
       `✅ Completo!\n\n` +
-      `🔗 **Ver no GitHub**: https://github.com/${githubUsername}/${repoName}/tree/main/${uploadFolderPath}`;
+      `🔗 **Ver no GitHub**: ${githubLink}`;
 
     if (progressMessage) {
       await progressMessage.edit(resultMessage);
@@ -656,8 +656,12 @@ async function handleHelpCommand(message: Message): Promise<void> {
     `• \`${COMMAND_PREFIX}whoami\` - Ver informações da sua conta\n\n` +
     `**Repositórios:**\n` +
     `• \`${COMMAND_PREFIX}repos\` - Listar seus repositórios\n` +
-    `• \`${COMMAND_PREFIX}upload <repo> <pasta>\` - Upload de ZIP para seu repositório\n` +
-    `  Exemplo: \`${COMMAND_PREFIX}upload meu-repo projetos\`\n` +
+    `• \`${COMMAND_PREFIX}upload <repo> [pasta]\` - Upload de ZIP extraído\n` +
+    `  📂 Sem pasta = raiz do repositório\n` +
+    `  📂 Com pasta = dentro da pasta especificada\n` +
+    `  Exemplo: \`${COMMAND_PREFIX}upload meu-repo\` (raiz)\n` +
+    `  Exemplo: \`${COMMAND_PREFIX}upload meu-repo src\` (pasta src)\n` +
+    `  ⚡ Arquivos existentes são substituídos automaticamente\n` +
     `  (anexe um arquivo ZIP na mensagem)\n\n` +
     `**Ajuda:**\n` +
     `• \`${COMMAND_PREFIX}help\` - Mostra esta mensagem\n\n` +
@@ -709,7 +713,7 @@ async function handleUploadCommand(
   }
 
   const repoName = args[1];
-  const folderPath = args[2] || 'uploads';
+  const folderPath = args[2] || '';
 
   try {
     const { data: user } = await octokit.users.getAuthenticated();
