@@ -125,6 +125,36 @@ function isZipFile(filename: string): boolean {
   return filename.toLowerCase().endsWith('.zip');
 }
 
+async function ensureRepoHasContent(
+  octokit: Octokit,
+  owner: string,
+  repo: string
+): Promise<void> {
+  try {
+    await octokit.repos.getContent({
+      owner,
+      repo,
+      path: '',
+    });
+  } catch (error: any) {
+    if (error.status === 404) {
+      const readmeContent = Buffer.from(
+        '# ' + repo + '\n\nRepositório criado automaticamente pelo Discord Bot para armazenar uploads.'
+      ).toString('base64');
+
+      await octokit.repos.createOrUpdateFileContents({
+        owner,
+        repo,
+        path: 'README.md',
+        message: 'Inicialização do repositório',
+        content: readmeContent,
+      });
+
+      console.log(`📝 Repositório inicializado com README.md`);
+    }
+  }
+}
+
 async function uploadToGitHub(
   octokit: Octokit,
   owner: string,
@@ -134,6 +164,8 @@ async function uploadToGitHub(
   message: string
 ): Promise<any> {
   try {
+    await ensureRepoHasContent(octokit, owner, repo);
+
     const contentBase64 = content.toString('base64');
 
     let sha: string | undefined;
