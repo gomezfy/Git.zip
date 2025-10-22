@@ -2,6 +2,7 @@ import { Client, GatewayIntentBits, Message, Attachment } from 'discord.js';
 import { Octokit } from '@octokit/rest';
 import https from 'https';
 import http from 'http';
+import AdmZip from 'adm-zip';
 import { saveUserToken, getUserToken, removeUserToken, hasUserToken, getUserData } from './userTokens.js';
 
 interface ConnectionSettings {
@@ -225,6 +226,72 @@ function createProgressBar(progress: number, total: number = 100): string {
   return `${bar} ${percentage}%`;
 }
 
+async function uploadZipContentsToGitHub(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  folderPath: string,
+  zipBuffer: Buffer,
+  authorTag: string,
+  progressCallback?: (current: number, total: number, fileName: string) => Promise<void>
+): Promise<{ totalFiles: number; uploadedFiles: number; failedFiles: string[] }> {
+  const zip = new AdmZip(zipBuffer);
+  const zipEntries = zip.getEntries().filter(entry => !entry.isDirectory && !entry.entryName.startsWith('__MACOSX'));
+
+  const totalFiles = zipEntries.length;
+  let uploadedFiles = 0;
+  const failedFiles: string[] = [];
+
+  await ensureRepoHasContent(octokit, owner, repo);
+
+  for (let i = 0; i < zipEntries.length; i++) {
+    const entry = zipEntries[i];
+    
+    try {
+      const fileName = entry.entryName;
+      const fileContent = entry.getData();
+      const contentBase64 = fileContent.toString('base64');
+
+      const filepath = `${folderPath}/${fileName}`;
+
+      if (progressCallback) {
+        await progressCallback(i + 1, totalFiles, fileName);
+      }
+
+      let sha: string | undefined;
+      try {
+        const { data: existingFile } = await octokit.repos.getContent({
+          owner,
+          repo,
+          path: filepath,
+        });
+
+        if (!Array.isArray(existingFile) && 'sha' in existingFile) {
+          sha = existingFile.sha;
+        }
+      } catch (error: any) {
+        if (error.status !== 404) throw error;
+      }
+
+      await octokit.repos.createOrUpdateFileContents({
+        owner,
+        repo,
+        path: filepath,
+        message: `Upload: ${fileName} (enviado por ${authorTag})`,
+        content: contentBase64,
+        sha,
+      });
+
+      uploadedFiles++;
+    } catch (error: any) {
+      console.error(`❌ Erro ao fazer upload de ${entry.entryName}:`, error.message);
+      failedFiles.push(entry.entryName);
+    }
+  }
+
+  return { totalFiles, uploadedFiles, failedFiles };
+}
+
 async function handleZipAttachment(
   message: Message,
   attachment: Attachment,
@@ -242,8 +309,8 @@ async function handleZipAttachment(
     await message.react('⏳');
 
     progressMessage = await message.reply(
-      `📤 **Iniciando upload...**\n\n` +
-      `📦 Arquivo: \`${attachment.name}\`\n` +
+      `📤 **Iniciando extração e upload...**\n\n` +
+      `📦 Arquivo ZIP: \`${attachment.name}\`\n` +
       `📁 Destino: \`${githubUsername}/${repoName}/${folderPath}\`\n\n` +
       `🔄 Progresso:\n${createProgressBar(0)}\n` +
       `⏳ Preparando...`
@@ -251,11 +318,11 @@ async function handleZipAttachment(
 
     await new Promise(resolve => setTimeout(resolve, 500));
     await progressMessage.edit(
-      `📤 **Fazendo upload...**\n\n` +
-      `📦 Arquivo: \`${attachment.name}\`\n` +
+      `📤 **Extraindo e enviando arquivos...**\n\n` +
+      `📦 Arquivo ZIP: \`${attachment.name}\`\n` +
       `📁 Destino: \`${githubUsername}/${repoName}/${folderPath}\`\n\n` +
-      `🔄 Progresso:\n${createProgressBar(20)}\n` +
-      `📥 Baixando arquivo...`
+      `🔄 Progresso:\n${createProgressBar(10)}\n` +
+      `📥 Baixando arquivo ZIP...`
     );
 
     console.log(`📥 Baixando arquivo: ${attachment.name}`);
@@ -267,43 +334,41 @@ async function handleZipAttachment(
       : `${(fileSize / 1024 / 1024).toFixed(2)} MB`;
 
     await progressMessage.edit(
-      `📤 **Fazendo upload...**\n\n` +
-      `📦 Arquivo: \`${attachment.name}\` (${fileSizeStr})\n` +
+      `📤 **Extraindo e enviando arquivos...**\n\n` +
+      `📦 Arquivo ZIP: \`${attachment.name}\` (${fileSizeStr})\n` +
       `📁 Destino: \`${githubUsername}/${repoName}/${folderPath}\`\n\n` +
-      `🔄 Progresso:\n${createProgressBar(40)}\n` +
-      `🔍 Verificando repositório...`
+      `🔄 Progresso:\n${createProgressBar(20)}\n` +
+      `📂 Extraindo conteúdo do ZIP...`
     );
 
     const timestamp = new Date()
       .toISOString()
       .replace(/[:.]/g, '-')
       .slice(0, -5);
-    const filepath = `${folderPath}/${timestamp}_${attachment.name}`;
+    const uploadFolderPath = `${folderPath}/${timestamp}`;
 
-    await progressMessage.edit(
-      `📤 **Fazendo upload...**\n\n` +
-      `📦 Arquivo: \`${attachment.name}\` (${fileSizeStr})\n` +
-      `📁 Destino: \`${githubUsername}/${repoName}/${folderPath}\`\n\n` +
-      `🔄 Progresso:\n${createProgressBar(60)}\n` +
-      `⬆️  Enviando para GitHub...`
-    );
-
-    console.log(`⬆️  Fazendo upload para GitHub: ${filepath}`);
-    uploadResult = await uploadToGitHub(
+    console.log(`📂 Extraindo conteúdo do ZIP e fazendo upload para GitHub...`);
+    
+    uploadResult = await uploadZipContentsToGitHub(
       octokit,
       githubUsername,
       repoName,
-      filepath,
+      uploadFolderPath,
       fileContent,
-      `Upload: ${attachment.name} (enviado por ${message.author.tag})`
-    );
-
-    await progressMessage.edit(
-      `📤 **Fazendo upload...**\n\n` +
-      `📦 Arquivo: \`${attachment.name}\` (${fileSizeStr})\n` +
-      `📁 Destino: \`${githubUsername}/${repoName}/${folderPath}\`\n\n` +
-      `🔄 Progresso:\n${createProgressBar(90)}\n` +
-      `✨ Finalizando...`
+      message.author.tag,
+      async (current, total, fileName) => {
+        const progress = 20 + Math.round((current / total) * 70);
+        if (progressMessage) {
+          await progressMessage.edit(
+            `📤 **Extraindo e enviando arquivos...**\n\n` +
+            `📦 Arquivo ZIP: \`${attachment.name}\` (${fileSizeStr})\n` +
+            `📁 Destino: \`${githubUsername}/${repoName}/${uploadFolderPath}\`\n\n` +
+            `📄 Enviando: \`${fileName}\`\n` +
+            `🔄 Progresso: ${current}/${total} arquivos\n${createProgressBar(progress)}\n` +
+            `⬆️  Fazendo upload...`
+          );
+        }
+      }
     );
 
     uploadSuccessful = true;
@@ -355,22 +420,41 @@ async function handleZipAttachment(
       ? `${(fileSize / 1024).toFixed(2)} KB`
       : `${(fileSize / 1024 / 1024).toFixed(2)} MB`;
 
-    if (progressMessage) {
-      await progressMessage.edit(
-        `✅ **Upload concluído!**\n\n` +
-        `📦 Arquivo: \`${attachment.name}\` (${fileSizeStr})\n` +
-        `📁 Repositório: \`${githubUsername}/${repoName}\`\n` +
-        `📂 Pasta: \`${folderPath}\`\n\n` +
-        `🔄 Progresso:\n${createProgressBar(100)}\n` +
-        `✅ Completo!\n\n` +
-        `🔗 **Link**: ${uploadResult.content.html_url}`
-      );
+    const timestamp = new Date()
+      .toISOString()
+      .replace(/[:.]/g, '-')
+      .slice(0, -5);
+    const uploadFolderPath = `${folderPath}/${timestamp}`;
+
+    let resultMessage = `✅ **Upload concluído!**\n\n` +
+      `📦 Arquivo ZIP: \`${attachment.name}\` (${fileSizeStr})\n` +
+      `📁 Repositório: \`${githubUsername}/${repoName}\`\n` +
+      `📂 Pasta: \`${uploadFolderPath}\`\n\n` +
+      `📊 Resultado:\n` +
+      `✅ Arquivos enviados: ${uploadResult.uploadedFiles}/${uploadResult.totalFiles}\n`;
+
+    if (uploadResult.failedFiles.length > 0) {
+      resultMessage += `⚠️  Arquivos com erro: ${uploadResult.failedFiles.length}\n`;
+      if (uploadResult.failedFiles.length <= 5) {
+        resultMessage += `\n**Arquivos que falharam:**\n`;
+        uploadResult.failedFiles.forEach((file: string) => {
+          resultMessage += `• \`${file}\`\n`;
+        });
+      }
     }
 
-    console.log(`✅ Upload concluído: ${uploadResult.content.html_url}`);
+    resultMessage += `\n🔄 Progresso:\n${createProgressBar(100)}\n` +
+      `✅ Completo!\n\n` +
+      `🔗 **Ver no GitHub**: https://github.com/${githubUsername}/${repoName}/tree/main/${uploadFolderPath}`;
+
+    if (progressMessage) {
+      await progressMessage.edit(resultMessage);
+    }
+
+    console.log(`✅ Upload concluído: ${uploadResult.uploadedFiles}/${uploadResult.totalFiles} arquivos`);
   } catch (error: any) {
     console.error('❌ Erro ao atualizar mensagem final:', error);
-    console.log(`✅ Upload concluído (atualização falhou): ${uploadResult.content.html_url}`);
+    console.log(`✅ Upload concluído (atualização falhou): ${uploadResult.uploadedFiles}/${uploadResult.totalFiles} arquivos`);
   }
 }
 
