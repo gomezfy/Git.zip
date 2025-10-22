@@ -47,7 +47,7 @@ async function getGitHubAccessToken(): Promise<string> {
     }
   );
 
-  const data = await response.json();
+  const data: any = await response.json();
   githubConnectionSettings = data.items?.[0];
 
   const accessToken =
