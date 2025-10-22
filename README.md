@@ -1,98 +1,217 @@
 # 🤖 Discord GitHub Bot
 
-Bot do Discord que faz upload automático de arquivos ZIP para o GitHub.
+Bot do Discord que permite cada usuário fazer upload de arquivos ZIP para seus próprios repositórios GitHub de forma individual e segura.
 
 ## 📋 Funcionalidades
 
-- ✅ Sistema de comandos com prefixo `.`
-- ✅ Upload de arquivos ZIP para GitHub via comando
-- ✅ Organiza os arquivos em uma pasta `uploads/` com timestamp
-- ✅ Retorna link do arquivo no GitHub após upload
+- ✅ Sistema de autenticação individual por usuário
+- ✅ Cada usuário gerencia seus próprios repositórios GitHub
+- ✅ Upload de arquivos ZIP com comando personalizado
+- ✅ Listagem de repositórios pessoais
+- ✅ Criptografia AES-256-GCM para proteção de tokens
+- ✅ Comandos intuitivos com prefixo `.`
 - ✅ Tratamento de erros com mensagens informativas
-- ✅ Comando de ajuda integrado
+- ✅ Sistema de login/logout seguro
 
 ## 🚀 Como Usar
 
-1. **Configure o Bot Discord**
-   - Acesse: https://discord.com/developers/applications
-   - Crie uma nova aplicação e adicione um bot
-   - Em **Bot Settings**, ative o **Message Content Intent**
-   - Em **OAuth2 → URL Generator**:
-     - Scope: `bot`
-     - Permissões necessárias:
-       - `View Channels` (ler canais)
-       - `Send Messages` (enviar mensagens)
-       - `Attach Files` (anexar arquivos)
-       - `Add Reactions` (adicionar reações)
-       - `Read Message History` (ler histórico de mensagens)
-   - Copie o link gerado e adicione o bot ao seu servidor
-   - Copie o **Bot Token** e adicione nas secrets do Replit como `DISCORD_BOT_TOKEN`
+### 1. Configuração Inicial do Bot Discord
 
-2. **Configure o repositório GitHub**
-   - Crie um repositório no GitHub (ex: `discord-uploads`)
-   - Ou defina a variável de ambiente `GITHUB_REPO` com o nome do repositório desejado
-   - A integração GitHub do Replit já está configurada
+1. Acesse: https://discord.com/developers/applications
+2. Crie uma nova aplicação e adicione um bot
+3. Em **Bot Settings**, ative o **Message Content Intent**
+4. Em **OAuth2 → URL Generator**:
+   - Scope: `bot`
+   - Permissões: `View Channels`, `Send Messages`, `Attach Files`, `Add Reactions`, `Read Message History`
+5. Copie o link gerado e adicione o bot ao seu servidor
+6. Copie o **Bot Token** e adicione nas secrets do Replit como `DISCORD_BOT_TOKEN`
 
-3. **Execute o bot**
-   ```bash
-   npm start
+### 2. Configuração de Segurança
+
+Configure as seguintes secrets no Replit:
+- `DISCORD_BOT_TOKEN`: Token do bot Discord
+- `ENCRYPTION_SECRET`: Chave de criptografia (mínimo 32 caracteres aleatórios)
+
+### 3. Integração GitHub
+
+A integração GitHub do Replit já está configurada no projeto.
+
+### 4. Usando o Bot no Discord
+
+#### Primeiro Login
+1. Gere um Personal Access Token no GitHub:
+   - Acesse: https://github.com/settings/tokens
+   - Clique em "Generate new token" → "Generate new token (classic)"
+   - Dê um nome (ex: "Discord Bot")
+   - Selecione permissão: `repo` (acesso completo a repositórios)
+   - Clique em "Generate token"
+   - Copie o token
+
+2. **IMPORTANTE**: Envie o comando de login em **DM (mensagem privada)** para o bot:
+   ```
+   .login seu_token_aqui
    ```
 
-4. **Use os comandos no Discord**
-   - `.upload` - Anexe um arquivo ZIP e use este comando para fazer upload
-   - `.help` - Mostra todos os comandos disponíveis
-   - Você receberá uma confirmação com o link do arquivo após o upload
+3. O bot confirmará seu login e mostrará seu nome de usuário GitHub
 
-## ⚙️ Configuração
+#### Comandos Disponíveis
+
+**Autenticação:**
+- `.login <token>` - Fazer login com seu token GitHub
+- `.logout` - Fazer logout e remover seu token
+- `.whoami` - Ver informações da sua conta
+
+**Repositórios:**
+- `.repos` - Listar seus repositórios (10 mais recentes)
+- `.upload <repositório> [pasta]` - Upload de arquivo ZIP
+  - Exemplo: `.upload meu-repo` - Upload para raiz
+  - Exemplo: `.upload meu-repo projetos` - Upload para pasta "projetos"
+  - **Importante**: Anexe um arquivo ZIP na mensagem!
+
+**Ajuda:**
+- `.help` - Mostra lista completa de comandos
+
+#### Exemplo de Uso Completo
+
+```
+1. Em DM com o bot:
+   .login ghp_seu_token_github_aqui
+
+2. Ver seus repositórios:
+   .repos
+
+3. Fazer upload (anexe um arquivo ZIP na mensagem):
+   .upload meu-repositorio projetos
+
+4. Verificar status:
+   .whoami
+```
+
+## ⚙️ Configuração Técnica
 
 ### Variáveis de Ambiente
 
-- `GITHUB_REPO`: Nome do repositório GitHub (padrão: `discord-uploads`)
+- `DISCORD_BOT_TOKEN`: Token do bot Discord (obrigatório)
+- `ENCRYPTION_SECRET`: Chave de criptografia para tokens (obrigatório, min 32 chars)
+- `GITHUB_REPO`: Nome do repositório padrão (opcional, padrão: discord-uploads)
 
-### Exemplo
+### Secrets Replit
 
-```bash
-GITHUB_REPO=meu-repositorio npm start
-```
+Configure estas secrets no Replit:
+1. `DISCORD_BOT_TOKEN` - Token do Discord
+2. `ENCRYPTION_SECRET` - Chave aleatória forte (mínimo 32 caracteres)
+
+### Integrações
+
+- **GitHub**: Autenticação OAuth via Replit Connectors
+- **Discord**: Bot token via Replit Secrets
 
 ## 📦 Tecnologias
 
 - **TypeScript**: Linguagem de programação
-- **discord.js**: Biblioteca para bot do Discord
-- **@octokit/rest**: Cliente da API do GitHub
-- **Replit Integrations**: Gerenciamento de autenticação Discord e GitHub
+- **Node.js**: Runtime (v20)
+- **discord.js**: Biblioteca para bot do Discord (v14)
+- **@octokit/rest**: Cliente da API do GitHub (v22)
+- **tsx**: Runtime TypeScript para desenvolvimento
+- **AES-256-GCM**: Criptografia para proteção de tokens
 
 ## 🔧 Scripts Disponíveis
 
 - `npm start`: Inicia o bot
 - `npm run dev`: Inicia em modo de desenvolvimento com hot reload
-- `npm run build`: Compila o TypeScript para JavaScript
+- `npm run build`: Compila TypeScript para JavaScript
 
-## 📝 Comandos Disponíveis
+## 🔐 Segurança
 
-### `.upload`
-Faz upload de um arquivo ZIP anexado para o GitHub.
+### Proteção de Tokens
 
-**Como usar:**
-1. Anexe um arquivo ZIP na mensagem
-2. Digite `.upload`
-3. O bot fará o upload e retornará o link do GitHub
+- Todos os tokens GitHub são criptografados com **AES-256-GCM** antes de serem salvos
+- A chave de criptografia é derivada usando **PBKDF2** com 100.000 iterações
+- Os tokens nunca são armazenados em texto plano
+- Sistema de autenticação individual - cada usuário tem seu próprio token
+- Recomendação: sempre use `.login` em **DM (mensagem privada)**
 
-### `.help`
-Mostra a lista de comandos disponíveis e informações sobre o repositório.
+### Boas Práticas
+
+1. **Nunca** compartilhe seu token GitHub
+2. Use `.login` apenas em DM com o bot
+3. Use `.logout` quando não precisar mais do bot
+4. Revogue tokens antigos em https://github.com/settings/tokens
+5. Gere novos tokens periodicamente
 
 ## 🔄 Como Funciona
 
-1. O bot escuta comandos que começam com `.`
-2. Com o comando `.upload`, ele baixa o arquivo ZIP anexado
-3. Faz upload do arquivo para o GitHub via API
-4. O arquivo é salvo em `uploads/TIMESTAMP_nome-do-arquivo.zip`
-5. Uma mensagem de confirmação é enviada com o link do GitHub
+1. Usuário faz login com `.login <token>`
+2. Token é validado via API GitHub
+3. Token é criptografado e armazenado de forma segura
+4. Usuário pode listar seus repositórios com `.repos`
+5. Para upload: anexa arquivo ZIP e usa `.upload <repo> [pasta]`
+6. Bot baixa o arquivo, faz upload para GitHub via API
+7. Arquivo é salvo com timestamp em `<pasta>/TIMESTAMP_arquivo.zip`
+8. Usuário recebe confirmação com link do GitHub
 
 ## ⚠️ Requisitos
 
+### Bot Discord
 - **Discord Bot Token**: Configure nas secrets do Replit
 - **Message Content Intent**: Deve estar ativado no Discord Developer Portal
-- **Repositório GitHub**: Deve existir antes de fazer uploads
-- **Permissões do Bot**: View Channels, Send Messages, Attach Files, Add Reactions, Read Message History
-- **Integração GitHub**: Configurada no Replit para autenticação OAuth
+- **Permissões**: View Channels, Send Messages, Attach Files, Add Reactions, Read Message History
+
+### Token GitHub
+- **Personal Access Token** com permissão `repo`
+- Gere em: https://github.com/settings/tokens
+
+### Replit
+- Integração GitHub configurada
+- Secrets configuradas (DISCORD_BOT_TOKEN, ENCRYPTION_SECRET)
+
+## 📝 Estrutura de Arquivos
+
+```
+.
+├── src/
+│   ├── index.ts          # Código principal do bot
+│   ├── userTokens.ts     # Gerenciamento de tokens de usuários
+│   └── encryption.ts     # Sistema de criptografia AES-256-GCM
+├── data/
+│   └── user_tokens.json  # Tokens criptografados (gerado automaticamente)
+├── package.json          # Dependências e scripts
+├── tsconfig.json         # Configuração TypeScript
+├── .gitignore           # Arquivos ignorados pelo Git
+└── README.md            # Esta documentação
+```
+
+## 🆘 Solução de Problemas
+
+### Bot não conecta
+- Verifique se `DISCORD_BOT_TOKEN` está configurado corretamente
+- Confirme que "Message Content Intent" está ativado no Discord
+
+### Login falha
+- Verifique se o token GitHub tem permissão `repo`
+- Certifique-se de copiar o token completo
+- Token pode ter expirado - gere um novo
+
+### Upload falha
+- Verifique se você está autenticado (`.whoami`)
+- Confirme que o repositório existe (`.repos`)
+- Certifique-se de anexar um arquivo .zip
+- Verifique se você tem permissão de escrita no repositório
+
+### Erro de criptografia
+- Certifique-se de que `ENCRYPTION_SECRET` está configurada
+- Secret deve ter no mínimo 32 caracteres
+- Se mudou a secret, faça logout e login novamente
+
+## 🎯 Próximos Passos (Melhorias Futuras)
+
+- [ ] Suporte para outros tipos de arquivo além de ZIP
+- [ ] Comando para deletar arquivos do GitHub
+- [ ] Comando para listar arquivos em um repositório
+- [ ] Sistema de permissões por servidor Discord
+- [ ] Logs de auditoria de uploads
+- [ ] Interface web para gerenciamento
+
+## 📄 Licença
+
+ISC
