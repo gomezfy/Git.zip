@@ -294,6 +294,8 @@ async function uploadZipContentsToGitHub(
         const normalizedPath = normalizePath(entry.entryName);
         const finalPath = folderPath ? normalizePath(`${folderPath}/${normalizedPath}`) : normalizedPath;
         
+        console.log(`📄 Caminho original: "${entry.entryName}" -> normalizado: "${finalPath}"`);
+        
         return {
           path: finalPath,
           mode: '100644' as const,
@@ -302,6 +304,9 @@ async function uploadZipContentsToGitHub(
         };
       })
     );
+    
+    console.log(`📊 Total de blobs criados: ${blobs.length}`);
+    console.log(`📋 Primeiros 3 caminhos:`, blobs.slice(0, 3).map(b => b.path));
 
     if (progressCallback) {
       await progressCallback(70, 100, 'Criando árvore Git...');
