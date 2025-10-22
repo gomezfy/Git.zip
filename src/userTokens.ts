@@ -1,5 +1,6 @@
 import { promises as fs } from 'fs';
 import path from 'path';
+import { encryptToken, decryptToken } from './encryption.js';
 
 interface UserTokenData {
   discordUserId: string;
@@ -47,9 +48,10 @@ export async function saveUserToken(
   githubUsername?: string
 ): Promise<void> {
   const tokens = await loadTokens();
+  const encryptedToken = encryptToken(githubToken);
   tokens[discordUserId] = {
     discordUserId,
-    githubToken,
+    githubToken: encryptedToken,
     githubUsername,
     registeredAt: new Date().toISOString(),
   };
@@ -58,7 +60,16 @@ export async function saveUserToken(
 
 export async function getUserToken(discordUserId: string): Promise<string | null> {
   const tokens = await loadTokens();
-  return tokens[discordUserId]?.githubToken || null;
+  const encryptedToken = tokens[discordUserId]?.githubToken;
+  if (!encryptedToken) {
+    return null;
+  }
+  try {
+    return decryptToken(encryptedToken);
+  } catch (error) {
+    console.error(`Erro ao descriptografar token para usuário ${discordUserId}:`, error);
+    return null;
+  }
 }
 
 export async function getUserData(discordUserId: string): Promise<UserTokenData | null> {
