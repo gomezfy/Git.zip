@@ -1,0 +1,27 @@
+{
+  "name": "discord-github-bot",
+  "version": "1.0.0",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "discord",
+    "github",
+    "bot"
+  ],
+  "author": "",
+  "license": "ISC",
+  "description": "Bot do Discord que faz upload de arquivos ZIP para GitHub",
+  "dependencies": {
+    "@octokit/rest": "^22.0.0",
+    "@types/node": "^24.9.1",
+    "discord.js": "^14.23.2",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}
