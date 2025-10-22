@@ -105,21 +105,55 @@ async function verifyGitHubToken(token: string): Promise<{ valid: boolean; usern
 }
 
 async function downloadFile(url: string): Promise<Buffer> {
+  const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB limit
+  const DOWNLOAD_TIMEOUT = 60000; // 60 seconds timeout
+  
   return new Promise((resolve, reject) => {
     const protocol = url.startsWith('https') ? https : http;
-    protocol
+    
+    const timeoutId = setTimeout(() => {
+      request.destroy();
+      reject(new Error('Download timeout: file took too long to download'));
+    }, DOWNLOAD_TIMEOUT);
+    
+    const request = protocol
       .get(url, (response) => {
         if (response.statusCode !== 200) {
+          clearTimeout(timeoutId);
           reject(new Error(`Failed to download file: ${response.statusCode}`));
           return;
         }
 
         const chunks: Buffer[] = [];
-        response.on('data', (chunk: Buffer) => chunks.push(chunk));
-        response.on('end', () => resolve(Buffer.concat(chunks)));
-        response.on('error', reject);
+        let totalSize = 0;
+        
+        response.on('data', (chunk: Buffer) => {
+          totalSize += chunk.length;
+          
+          if (totalSize > MAX_FILE_SIZE) {
+            clearTimeout(timeoutId);
+            request.destroy();
+            reject(new Error(`File too large: exceeds ${MAX_FILE_SIZE / 1024 / 1024}MB limit`));
+            return;
+          }
+          
+          chunks.push(chunk);
+        });
+        
+        response.on('end', () => {
+          clearTimeout(timeoutId);
+          resolve(Buffer.concat(chunks));
+        });
+        
+        response.on('error', (error) => {
+          clearTimeout(timeoutId);
+          reject(error);
+        });
       })
-      .on('error', reject);
+      .on('error', (error) => {
+        clearTimeout(timeoutId);
+        reject(error);
+      });
   });
 }
 
