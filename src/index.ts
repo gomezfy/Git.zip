@@ -311,7 +311,7 @@ async function uploadZipContentsToGitHub(
   zipBuffer: Buffer,
   authorTag: string,
   progressCallback?: (current: number, total: number, fileName: string) => Promise<void>
-): Promise<{ totalFiles: number; uploadedFiles: number; failedFiles: string[] }> {
+): Promise<{ totalFiles: number; uploadedFiles: number; failedFiles: string[]; skippedFiles: number }> {
   const MAX_UNCOMPRESSED_SIZE = 500 * 1024 * 1024; // 500MB uncompressed limit
   const MAX_COMPRESSION_RATIO = 100; // Max 100:1 compression ratio
   const MAX_FILES = 10000; // Max 10k files to prevent resource exhaustion
@@ -390,6 +390,13 @@ async function uploadZipContentsToGitHub(
   const totalFiles = zipEntries.length;
   let uploadedFiles = 0;
   const failedFiles: string[] = [];
+  const skippedFiles = allEntries.length - zipEntries.length;
+
+  // Log filtered files info
+  if (skippedFiles > 0) {
+    console.log(`📋 Arquivos filtrados (ignorados): ${skippedFiles}`);
+    console.log(`📦 Arquivos para upload: ${totalFiles}`);
+  }
 
   await ensureRepoHasContent(octokit, owner, repo);
 
@@ -486,8 +493,24 @@ async function uploadZipContentsToGitHub(
             }
           }
         } catch (error: any) {
-          console.error(`❌ Erro ao fazer upload de ${entry.entryName}:`, error.message);
-          failedFiles.push(`${entry.entryName} (${error.message})`);
+          const sanitizedError = sanitizeErrorMessage(error);
+          console.error(`❌ Erro ao fazer upload de ${entry.entryName}:`, sanitizedError);
+          
+          // Simplify error message for user
+          let userMessage = sanitizedError;
+          if (error.status === 409) {
+            userMessage = 'Conflito - arquivo modificado durante upload';
+          } else if (error.status === 403) {
+            userMessage = 'Sem permissão - verifique token GitHub';
+          } else if (error.status === 404) {
+            userMessage = 'Repositório não encontrado';
+          } else if (error.status === 422) {
+            userMessage = 'Arquivo inválido ou muito grande';
+          } else if (sanitizedError.length > 100) {
+            userMessage = sanitizedError.substring(0, 100) + '...';
+          }
+          
+          failedFiles.push(`${entry.entryName} (${userMessage})`);
         }
       })
     );
@@ -497,7 +520,7 @@ async function uploadZipContentsToGitHub(
     await progressCallback(uploadedFiles, totalFiles, 'Concluído');
   }
 
-  return { totalFiles, uploadedFiles, failedFiles };
+  return { totalFiles, uploadedFiles, failedFiles, skippedFiles };
 }
 
 async function handleZipUpload(
@@ -583,15 +606,33 @@ async function handleZipUpload(
       `📂 Localização: ${locationDisplay}\n\n` +
       `📊 Resultado:\n` +
       `✅ Arquivos enviados: ${uploadResult.uploadedFiles}/${uploadResult.totalFiles}\n`;
+    
+    if (uploadResult.skippedFiles > 0) {
+      resultMessage += `🔇 Arquivos ignorados: ${uploadResult.skippedFiles} (sistema/cache)\n`;
+    }
 
     if (uploadResult.failedFiles.length > 0) {
       resultMessage += `⚠️  Arquivos com erro: ${uploadResult.failedFiles.length}\n`;
-      if (uploadResult.failedFiles.length <= 5) {
+      
+      // Show up to 10 failed files
+      const filesToShow = uploadResult.failedFiles.slice(0, 10);
+      if (filesToShow.length > 0) {
         resultMessage += `\n**Arquivos que falharam:**\n`;
-        uploadResult.failedFiles.forEach((file: string) => {
-          resultMessage += `• \`${file}\`\n`;
+        filesToShow.forEach((file: string) => {
+          // Truncate long file names
+          const displayFile = file.length > 80 ? file.substring(0, 77) + '...' : file;
+          resultMessage += `• \`${displayFile}\`\n`;
         });
+        
+        if (uploadResult.failedFiles.length > 10) {
+          resultMessage += `• ... e mais ${uploadResult.failedFiles.length - 10} arquivo(s)\n`;
+        }
       }
+      
+      // Add helpful tips
+      resultMessage += `\n💡 **Dicas:**\n`;
+      resultMessage += `• Arquivos do sistema (.local, .cache) são ignorados automaticamente\n`;
+      resultMessage += `• Verifique se o repositório existe e você tem permissão de escrita\n`;
     }
 
     resultMessage += `\n🔄 Progresso:\n${createProgressBar(100)}\n` +
